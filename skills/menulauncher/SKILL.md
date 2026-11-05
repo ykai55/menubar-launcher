@@ -1,11 +1,11 @@
 ---
 name: menulauncher
-description: Install, update, and organize MenuLauncher, a macOS menu bar app launcher. Use when the user wants to install or update MenuLauncher, pin apps to the top, hide apps, or group apps into (nested) folders in their launcher, or says things like "整理启动器 / 把这些应用放进一个目录 / 隐藏某个应用".
+description: Install, update, and organize MenuLauncher, a macOS menu bar app launcher. Use when the user wants to install or update MenuLauncher, pin apps to the top, hide apps, group apps into (nested) folders, or arrange the launcher based on how they actually use it, or says things like "整理启动器 / 把这些应用放进一个目录 / 隐藏某个应用 / 按我的使用习惯排一下".
 ---
 
 # MenuLauncher
 
-MenuLauncher is a menu bar dropdown launcher for macOS 15+ (⌥Space or click the menu bar icon). The app does not sort by usage. Apps stay in fixed positions so the user can rely on spatial memory: a 固定 (pinned) section, then a 目录 (folders) section, then A–Z by name or pinyin. All organization lives in a JSON config file that you edit. The app reloads it automatically.
+MenuLauncher is a menu bar dropdown launcher for macOS 15+ (⌥Space by default, configurable, or click the menu bar icon). The app does not sort by usage. Apps stay in fixed positions so the user can rely on spatial memory: a 固定 (pinned) section at the top, then one of two modes the user switches with a toggle or Tab. 定制 (custom) mode shows 应用: folder tiles and apps not in any folder, mixed in one order. The user can drag tiles to reorder them within a section. 顺序 (sorted) mode shows every app A–Z by name or pinyin, ignoring folders. All organization lives in a JSON config file that you edit. The app reloads it automatically.
 
 ## Install and update
 
@@ -22,6 +22,24 @@ Without Homebrew, download `MenuLauncher.dmg` from https://github.com/ykai55/men
 
 The cask also installs a `menulauncher` command. If it is missing (for example after a DMG install), use `/Applications/MenuLauncher.app/Contents/MacOS/MenuLauncher` instead.
 
+### Last step of a fresh install: ask about a shortcut
+
+After the app is running, ask the user how they want to open the panel. Use the host's multiple-choice question tool if there is one; otherwise list the options in the reply. Offer these, with ⌥Space first as the default:
+
+- **⌥Space (Option-Space)**: the default, opens the panel under the menu bar icon. Nothing to write.
+- **Another key combination**: ask which one, then write it to `hotkey`, for example `"hotkey": ["command+shift+l"]`. Mention that ⌥Space stops working unless they keep it in the list.
+- **Mouse side button (back)**: opens the panel at the cursor. Writes `"mouse": [{"button": "back"}]`. The browser's Back on that button stops working.
+- **Option + side button**: same, but the side button keeps working as Back in the browser. Writes `"mouse": [{"button": "back", "modifiers": ["option"]}]`.
+- **Not now**: change nothing.
+
+The user can pick a mouse option in addition to a keyboard shortcut. If they pick a mouse option:
+
+1. Add the `mouse` entry to `~/.config/menulauncher/config.json` (create the file if needed and keep existing fields), then run `menulauncher --check`.
+2. Tell them macOS will ask for the Accessibility permission (System Settings → Privacy & Security → Accessibility) and that the button starts working a few seconds after they turn MenuLauncher on, without a restart.
+3. If the back button does nothing, have them try `forward`. Field details are under `mouse` in [Config format](#config-format).
+
+Run `menulauncher --check` after writing `hotkey` too. Skip this question for updates and when the config already has a `mouse` or `hotkey` entry.
+
 ## Workflow for organizing
 
 1. Run `menulauncher --list-apps` to get every installed app as JSON (`name`, `bundleId`, `path`, plus `pinned`, `hidden`, and `folder` when they apply). Names are localized, for example `终端` for Terminal. Match the user's wording against `name`, then write `bundleId` into the config.
@@ -29,6 +47,20 @@ The cask also installs a `menulauncher` command. If it is missing (for example a
 3. Edit only what the user asked for and keep everything else, including existing order. Order in the file is the display order, and the user relies on positions staying put.
 4. Run `menulauncher --check`. Exit 0 means OK. Exit 1 means the JSON is invalid; the app keeps its previous config and shows a warning banner, so fix it right away. Exit 2 means some references match no installed app; tell the user which ones.
 5. You don't need to restart anything. The app reloads when the file changes.
+
+## Arranging by usage
+
+The app records usage locally in `~/.config/menulauncher/usage.jsonl` and never uploads it. It logs one JSON line per panel open (`trigger`: `hotkey` or `click`) and per app launch (`via`: `pinned`, `grid`, `folder`, or `search`, plus the search `query` or the `folder` path). The app never reorders anything by itself. When the user asks you to arrange things by how they use them, you make the change:
+
+1. Run `menulauncher --stats` (or `--stats 30` for the last 30 days). You get JSON with `apps` sorted by `launches`, each with `lastUsed`, a `via` breakdown, and the search `queries` used to reach it.
+2. Propose changes, then confirm them with the user before writing:
+   - Pin apps that are launched often, especially ones the user keeps finding via `search` or digging out of the grid. Keep the pinned list short, around 6–12.
+   - Apps that are always opened through search are fine as they are. Searching is already fast, so pin them only if the user agrees.
+   - Suggest hiding installed apps that never appear in the stats, or moving them into a folder. Stats only cover the time since recording started (`since`), so be careful with a short history.
+   - Put pinned apps in a stable order, for example by frequency. After that, don't keep reshuffling them on every run, because the user memorizes positions.
+3. Edit the config and run `--check` as usual.
+
+If the user doesn't want recording, set `"recordUsage": false` in the config. To clear the history, delete `usage.jsonl`.
 
 ## Config format
 
@@ -52,8 +84,20 @@ The cask also installs a `menulauncher` command. If it is missing (for example a
 - An app reference can be a bundle id (preferred, because it survives the app moving), an absolute path starting with `/` or `~`, or the exact displayed name. Matching is case-insensitive.
 - `pinned`: shown in order at the top. Pinning is a shortcut, so a pinned app still appears in its folder or letter group.
 - `hidden`: removed from the grid and from search.
-- `folders`: shown as folder tiles in the 目录 section. They can nest to any depth through `folders`. An app that is in any folder no longer appears in the A–Z groups, but search still finds it. One app should be in at most one folder.
+- `folders`: shown as folder tiles in 定制 mode. They can nest to any depth through `folders`. In 定制 mode an app that is in any folder no longer appears in 应用; 顺序 mode and search still show it. One app should be in at most one folder.
 - Folder names must be non-empty and unique among siblings.
+- `order`: the mixed order of folders and unfiled apps in the 应用 section in 定制 mode. Apps are written as references, folders as `"folder:<name>"`. Unlisted folders come first in `folders` order, unlisted apps come last by name. A folder can have its own `order` with the same format for its subfolders and apps (unlisted subfolders first, then apps in `apps` order). Dragging writes `pinned`, top-level `order`, and folder `order`. If you rename a folder, update its `folder:` entries too.
+- `recordUsage`: set to `false` to stop writing `usage.jsonl`. Defaults to `true`.
+- `hotkey`: global shortcuts that open the panel under the menu bar icon. Defaults to `["option+space"]` when absent; `[]` turns keyboard shortcuts off. A single string is accepted.
+  - Format: modifiers (`command`, `option`, `control`, `shift`) and one key joined by `+`, for example `"command+shift+l"`. Keys: `a`–`z`, `0`–`9`, `space`, `return`, `tab`, `escape`, `delete`, arrows (`left` / `right` / `up` / `down`), `home`, `end`, `pageup`, `pagedown`, `f1`–`f20`, and `` ` - = [ ] \ ; ' , . / ``. Letters follow the US key positions.
+  - A key without modifiers is only allowed for F keys. `--check` warns about unknown or unsafe shortcuts, and the app ignores them.
+  - If another app already owns the combination, registering it silently fails; suggest a different one.
+- `mouse`: mouse buttons that open the panel at the cursor, for example `[{"button": "back"}, {"button": "forward", "modifiers": ["option"]}]`.
+  - `button` is `back`, `forward`, `middle`, or a button number (3 = back, 4 = forward, 5+ for extra buttons).
+  - `modifiers` takes `command`, `option`, `control`, or `shift`, and must match exactly.
+  - A matching click is swallowed, so a bare `back` no longer means Back in the browser. Suggest a modifier combination if the user still wants the browser to get it.
+  - Left and right buttons (0/1) require a modifier. This needs the Accessibility permission (System Settings → Privacy & Security → Accessibility). The app prompts for it once and starts working as soon as it is granted.
+  - If the user doesn't know their button number, have them try `back` and `forward` first.
 
 ## Tips
 

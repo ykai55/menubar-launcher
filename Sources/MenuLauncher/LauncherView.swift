@@ -9,7 +9,6 @@ enum Layout {
     static let columns = 6
     static let cellWidth: CGFloat = (width - padding * 2) / CGFloat(columns)
     static let cellHeight: CGFloat = 88
-    static let labelHeight: CGFloat = 28
     /// 上方 8 + 胶囊 22 + 下方 8 的间隙
     static let headerHeight: CGFloat = 38
     static let maxGridHeight: CGFloat = 520
@@ -38,6 +37,9 @@ struct LauncherView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .focused($focused)
+                if model.isBrowsing {
+                    ModeSwitch(mode: model.mode) { model.setMode($0) }
+                }
             }
             .padding(.horizontal, 12)
             .frame(height: Layout.searchHeight)
@@ -66,37 +68,76 @@ struct LauncherView: View {
     }
 
     private var grid: some View {
-        ScrollViewReader { proxy in
+        // 这一层的 key。过渡期间正在淡出的旧层还活着，它的滚动回调不能写到新层的偏移里
+        let level = model.levelKey
+        return ScrollViewReader { proxy in
+          // 外面套一层 ZStack，换层时新旧两个滚动视图能同时存在，做交叉过渡
+          ZStack {
             ScrollView {
-                // 摊平成一层：每个分组标题、每行图标都是固定高度、id 唯一的子项。
-                // 之前嵌套 ForEach 用 offset 作 id，各分组之间重复，LazyVStack 复用视图时会错位
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.entries) { entry in
-                        switch entry.kind {
-                        case .header(let title):
-                            SectionHeader(title: title) { model.showingIndex = true }
-                        case .back(let name):
-                            BackBar(name: name) { model.leaveFolder() }
-                        case .row(let indices):
-                            HStack(spacing: 0) {
-                                ForEach(indices, id: \.self) { cell($0) }
-                                Spacer(minLength: 0)
+              VStack(spacing: 0) {
+                // 内容最顶端（含上边距）的锚点，恢复到第一项时滚到这里，不会把上边距滚出去
+                Color.clear.frame(height: 0).id(Self.topAnchor)
+                // 摊平成一层：每个分组标题、每行都是固定高度、id 唯一的子项，供滚动定位。
+                // 行只占位，格子全部放在上面同一层里按坐标摆：拖动让位时每个图标只是换位置，
+                // 跨行也是同一个视图滑过去。分行放在各自 HStack 里时，跨行等于旧行删一个、新行插一个，会同时看到两个
+                let geo = GridGeometry(entries: model.entries, count: model.browseItems.count)
+                ZStack(alignment: .topLeading) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(model.entries) { entry in
+                            switch entry.kind {
+                            case .header(let title):
+                                SectionHeader(title: title) { model.showingIndex = true }.id(entry.id)
+                            case .back(let name):
+                                BackBar(name: name) { model.leaveFolder() }.id(entry.id)
+                            case .row:
+                                Color.clear.frame(height: Layout.cellHeight).id(entry.id)
                             }
-                            .frame(height: Layout.cellHeight)
                         }
                     }
+                    ForEach(model.browseItems.indices.map { ($0, model.tileKey($0)) }, id: \.1) { i, _ in
+                        cell(i, geo: geo)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .coordinateSpace(.named(Self.gridSpace))
                 .scrollTargetLayout()
                 .padding(Layout.padding)
+              }
+              // 格子之间的空隙在滚动内容里，外面的点击层收不到，内容这一层也要接一下
+              .background { backgroundTap }
+              // 拖动自动滚动的锚点，放在内容的 autoScrollY 处，滚到它就是滚到这个偏移。
+              // 用 alignmentGuide 而不是 offset：offset 不改布局位置，scrollTo 找不到
+              .overlay(alignment: .top) {
+                  Color.clear.frame(width: 1, height: 1)
+                      .alignmentGuide(.top) { _ in -model.autoScrollY }
+                      .id(Self.autoScrollAnchor)
+              }
             }
             .scrollIndicators(.never)
+            // 网格不参与键盘焦点：换层时新的滚动视图插进来，焦点系统会重新走一遍，
+            // 搜索框失焦再聚焦，光标闪烁重新计时，看起来像突然快闪了一下
+            .focusable(false)
+            .focusEffectDisabled()
+            // 目录里点空白处（格子之间、网格下方）回到上一级。格子自己的点击优先，不会触发这里
+            .background { backgroundTap }
             // 只读地记录像素偏移。滚动只通过 proxy.scrollTo 主动触发，不绑定 scrollPosition：
             // 绑定的值不会随手动滚动/跳转更新，视图一刷新（比如 hover 改选中项）就会把列表拉回那个旧位置
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in
-                if model.isBrowsing && !model.showingIndex && !model.inFolder { model.scrollOffset = max(y, 0) }
+                if level == model.levelKey && model.isBrowsing && !model.showingIndex && !model.inFolder {
+                    model.scrollOffset = max(y, 0)
+                }
             }
-            // 每一层目录各用一个滚动视图：进目录从顶部开始，退回顶层时重新出现，按保存的偏移恢复
-            .id(model.levelKey)
+            .onScrollGeometryChange(for: CGRect.self, of: { $0.visibleRect }) { _, r in
+                guard level == model.levelKey else { return }
+                model.viewportOffset = r.minY
+                model.viewportHeight = r.height
+            }
+            .onChange(of: model.autoScrollY) {
+                guard model.dragIndex != nil else { return }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { proxy.scrollTo(Self.autoScrollAnchor, anchor: .top) }
+            }
             // 滚动视图常驻，隐藏再打开时位置本来就还在，只在网格重新出现（启动、从搜索切回、退出目录）时恢复
             .onAppear { if !model.inFolder { restoreScroll(proxy) } }
             .onChange(of: model.scrollRequest) {
@@ -106,19 +147,50 @@ struct LauncherView: View {
             // 索引层常驻，只切换透明度和命中测试。按需插入/移除时，移除后 ScrollView 的鼠标跟踪不会立即恢复，
             // 要再点一下才能滚动
             .overlay {
-                LetterIndex(available: Set(model.sectionTitles),
+                LetterIndex(letters: LetterIndex.letters(for: model.mode),
+                            available: Set(model.sectionTitles),
                             onPick: { model.jump(to: $0) },
                             onDismiss: { model.showingIndex = false })
                     .opacity(model.showingIndex ? 1 : 0)
+                    .scaleEffect(model.showingIndex ? 1 : 0.97)
                     .allowsHitTesting(model.showingIndex)
             }
-            .animation(.easeOut(duration: 0.12), value: model.showingIndex)
+            .animation(.easeOut(duration: 0.15), value: model.showingIndex)
+            // 每一层目录、每种模式各用一个滚动视图：进目录从顶部开始，退回顶层时重新出现，按保存的偏移恢复。
+            // 换层时新旧两层交叉淡入淡出
+            .id(model.levelKey)
+            .transition(levelTransition)
+          }
         }
+        .animation(.easeOut(duration: 0.18), value: model.levelKey)
+        .clipped()
+    }
+
+    /// 新的一层从略小放大淡入，旧的一层直接淡出。以顶边为缩放中心，列表顶端始终贴着搜索框，不会上下漂
+    private var levelTransition: AnyTransition {
+        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity)
+    }
+
+    private static let topAnchor = "top"
+    private static let autoScrollAnchor = "autoScroll"
+
+    /// 目录里点空白处回到上一级
+    private var backgroundTap: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture { if model.inFolder && model.dragIndex == nil { model.leaveFolder() } }
     }
 
     private func restoreScroll(_ proxy: ScrollViewProxy) {
         guard let id = model.entryIDForSavedOffset() else { return }
-        DispatchQueue.main.async { proxy.scrollTo(id, anchor: .top) }
+        // 第一项就滚到最顶端；直接 scrollTo 第一项会把上边距也滚出去，列表看起来往上错了几个像素
+        let target = id == model.entries.first?.id ? Self.topAnchor : id
+        // 不带动画：恢复发生在换层过渡里，带上过渡的动画会让列表滑一下再停住
+        DispatchQueue.main.async {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo(target, anchor: .top) }
+        }
     }
 
     /// 滚轮滚动时，格子从静止的光标下滑过也会触发 hover，这时忽略。
@@ -128,16 +200,19 @@ struct LauncherView: View {
         model.selection = i
     }
 
-    private func cell(_ i: Int) -> some View {
+    private static let gridSpace = "grid"
+
+    private func cell(_ i: Int, geo: GridGeometry) -> some View {
         let tile = model.browseItems[i]
         return GridCell(tile: tile, selected: i == model.selection)
             .equatable()
-            .onHover { if $0 { hoverSelect(i) } }
+            .onHover { if $0 && model.dragIndex == nil { hoverSelect(i) } }
             .onTapGesture { model.launch(at: i) }
             .contextMenu {
                 if case .app(let app) = tile { menu(for: app) }
                 else { Button("编辑配置文件…") { model.openConfig() } }
             }
+            .modifier(Reorderable(model: model, index: i, geo: geo, space: Self.gridSpace))
     }
 
     private var list: some View {
@@ -232,10 +307,121 @@ private struct BackBar: View {
     }
 }
 
-/// 首字母索引：固定位置排出 固定 / A–Z / #，没有应用的字母置灰，位置不随应用增减变化
-private struct LetterIndex: View {
-    static let letters = ["固定", "目录"] + (65...90).map { String(UnicodeScalar($0)!) } + ["#"]
+/// 摆放格子，并在定制模式下支持拖动排序。不用系统拖放（onDrag），而是格子自己跟着鼠标走：
+/// 系统的拖动图像是另一张截图，松手后还要停留几帧才消失，和落位的格子同时出现。
+/// 拖过同组的格子时其他格子实时让位（只改内存），松手时从当前位置弹回空位，并一次性写回配置
+private struct Reorderable: ViewModifier {
+    @ObservedObject var model: LauncherModel
+    let index: Int
+    let geo: GridGeometry
+    let space: String
 
+    func body(content: Content) -> some View {
+        let dragging = model.dragIndex == index
+        let o = dragging ? model.dragOrigin : geo.origins[index]
+        let placed = content
+            .scaleEffect(dragging ? 1.08 : 1)
+            .shadow(color: .black.opacity(dragging ? 0.25 : 0), radius: 8, y: 3)
+            .offset(x: o.x, y: o.y)
+            .zIndex(dragging ? 1 : 0)
+        if model.canReorder {
+            placed.gesture(
+                DragGesture(minimumDistance: 4, coordinateSpace: .named(space))
+                    .onChanged { model.drag(index, start: $0.startLocation, location: $0.location, geo: geo) }
+                    .onEnded { model.endDrag(location: $0.location, inGrid: geo.contains($0.location)) }
+            )
+        } else {
+            placed
+        }
+    }
+}
+
+/// 每个格子在网格内容里的左上角坐标，和 entries 的排法一致
+struct GridGeometry {
+    private(set) var origins: [CGPoint]
+    /// 每一行：顶边 y 和它包含的格子下标
+    private var rows: [(y: CGFloat, indices: [Int])] = []
+    private(set) var height: CGFloat = 0
+
+    init(entries: [GridEntry], count: Int) {
+        origins = Array(repeating: .zero, count: count)
+        var y: CGFloat = 0
+        for e in entries {
+            let r = e.indices
+            if r.isEmpty { y += Layout.headerHeight; continue }
+            for (c, i) in r.enumerated() where i < count {
+                origins[i] = CGPoint(x: CGFloat(c) * Layout.cellWidth, y: y)
+            }
+            rows.append((y, r))
+            y += Layout.cellHeight
+        }
+        height = y
+    }
+
+    /// 松手的位置还在网格范围内（稍微出界一点也算），否则当作取消
+    func contains(_ p: CGPoint) -> Bool {
+        p.x > -20 && p.x < Layout.width - Layout.padding * 2 + 20 && p.y > -20 && p.y < height + 20
+    }
+
+    /// 某个位置落在哪一格；在一行末尾的空白处算这一行最后一格，落在标题上返回 nil。
+    /// inset 是格子四周不算数的比例：位置要进到格子中间这一圈才算，避免在两格交界处来回跳
+    func index(at p: CGPoint, inset: CGFloat = 0) -> Int? {
+        guard let row = rows.last(where: { $0.y <= p.y }), p.y < row.y + Layout.cellHeight else { return nil }
+        let fy = (p.y - row.y) / Layout.cellHeight
+        guard fy >= inset, fy <= 1 - inset else { return nil }
+        let col = p.x / Layout.cellWidth
+        let c = Int(col)
+        if c < row.indices.count {
+            let fx = col - CGFloat(c)
+            guard c >= 0, fx >= inset, fx <= 1 - inset else { return nil }
+            return row.indices[c]
+        }
+        return row.indices.last
+    }
+}
+
+/// 搜索框右侧的 定制 / 顺序 切换，Tab 键也能切。选中底板在两项之间滑动
+private struct ModeSwitch: View {
+    let mode: BrowseMode
+    let onPick: (BrowseMode) -> Void
+
+    @Namespace private var ns
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach([BrowseMode.custom, .sorted], id: \.self) { m in
+                Text(m.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(m == mode ? Color.white : Color.secondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 20)
+                    .background {
+                        if m == mode {
+                            Capsule().fill(Color.accentColor).matchedGeometryEffect(id: "pill", in: ns)
+                        }
+                    }
+                    .contentShape(Capsule())
+                    .onTapGesture { onPick(m) }
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
+        .animation(.spring(duration: 0.25, bounce: 0.15), value: mode)
+        .help("切换定制 / 顺序（Tab）。定制模式下可以拖动调整目录和应用的顺序")
+    }
+}
+
+/// 分组索引：固定位置排出各个分组，没有内容的置灰，位置不随应用增减变化。
+/// 顺序模式是 固定 / A–Z / #，定制模式是 固定 / 应用（目录和应用混排在「应用」里）
+private struct LetterIndex: View {
+    static func letters(for mode: BrowseMode) -> [String] {
+        switch mode {
+        case .custom: return ["固定", "应用"]
+        case .sorted: return ["固定"] + (65...90).map { String(UnicodeScalar($0)!) } + ["#"]
+        }
+    }
+
+    let letters: [String]
     let available: Set<String>
     let onPick: (String) -> Void
     let onDismiss: () -> Void
@@ -252,7 +438,7 @@ private struct LetterIndex: View {
                 .onTapGesture(perform: onDismiss)
 
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(Self.letters, id: \.self) { letter in
+                ForEach(letters, id: \.self) { letter in
                     let enabled = available.contains(letter)
                     let isHovered = enabled && hovered == letter
                     Text(letter)
@@ -302,7 +488,7 @@ private struct GridCell: View, Equatable {
             case .folder(_, _, let icons):
                 FolderIcon(icons: icons)
             }
-            // 最多两行，固定占两行高度，单行名字顶部对齐，同一行图标保持齐平
+            // 最多两行，按实际行数占高度，高亮底板跟着名字收缩；格子顶部对齐，同一行图标保持齐平
             Text(name)
                 .font(.system(size: 11))
                 .lineLimit(2)
@@ -310,15 +496,17 @@ private struct GridCell: View, Equatable {
                 .truncationMode(.tail)
                 .foregroundStyle(selected ? Color.white : Color.primary)
                 .padding(.horizontal, 4)
-                .frame(height: Layout.labelHeight, alignment: .top)
         }
-        .padding(.top, 6)
-        .frame(width: Layout.cellWidth - 4, height: Layout.cellHeight - 4, alignment: .top)
+        .padding(.vertical, 6)
+        .frame(width: Layout.cellWidth - 4)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(selected ? Color.accentColor : Color.clear)
         )
-        .frame(width: Layout.cellWidth, height: Layout.cellHeight)
+        // 高亮淡入淡出，hover 扫过时不会一格格硬闪
+        .animation(.easeOut(duration: 0.1), value: selected)
+        .padding(.top, 2)
+        .frame(width: Layout.cellWidth, height: Layout.cellHeight, alignment: .top)
         .contentShape(Rectangle())
         .help(name)
     }

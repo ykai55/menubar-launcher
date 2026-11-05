@@ -31,6 +31,16 @@ enum Tile: Identifiable {
         case .folder(_, let path, _): return "f:" + path.map(String.init).joined(separator: ".")
         }
     }
+
+    var isFolder: Bool { if case .folder = self { true } else { false } }
+}
+
+/// 浏览网格的两种排法：定制模式按配置的目录和顺序组织，可以拖动调整；顺序模式把所有应用按首字母排开
+enum BrowseMode: String {
+    case custom, sorted
+
+    var title: String { self == .custom ? "定制" : "顺序" }
+    var other: BrowseMode { self == .custom ? .sorted : .custom }
 }
 
 struct ScrollRequest: Equatable {
@@ -47,8 +57,10 @@ final class LauncherModel: ObservableObject {
     @Published var query = "" { didSet { refilter() } }
     /// 搜索模式下的结果
     @Published private(set) var results: [AppItem] = []
-    /// 浏览模式（空查询）下的全部条目：固定区 + A–Z，顺序稳定
+    /// 浏览模式（空查询）下的全部格子，按显示顺序
     @Published private(set) var browseItems: [Tile] = []
+    /// 和 browseItems 一一对应：每格所属分组的 key，拖动只能在同一分组内进行
+    private var tileGroups: [String] = []
     @Published private(set) var entries: [GridEntry] = []
     /// 来自 ~/.config/menulauncher/config.json，外部修改后自动重新读取
     @Published private(set) var config = LauncherConfig()
@@ -57,10 +69,14 @@ final class LauncherModel: ObservableObject {
     /// 当前打开的目录（配置里的下标路径），空表示在顶层
     @Published private(set) var folderPath: [Int] = []
     @Published var selection = 0
-    /// 浏览网格的滚动偏移（像素），跨次打开（包括重启）保持滚动位置。
+    /// 用户选过的模式；没选过时有目录就用定制模式，否则用顺序模式
+    @Published private var chosenMode = UserDefaults.standard.string(forKey: "browseMode").flatMap(BrowseMode.init)
+    var mode: BrowseMode { chosenMode ?? (config.folders.isEmpty ? .sorted : .custom) }
+    /// 当前模式顶层网格的滚动偏移（像素），两种模式各存一份，跨次打开（包括重启）保持滚动位置。
     /// 故意不用 @Published：滚动时它会频繁变化，发布出去会让整个面板跟着重绘
-    var scrollOffset: CGFloat = UserDefaults.standard.double(forKey: "scrollOffset") {
-        didSet { UserDefaults.standard.set(Double(scrollOffset), forKey: "scrollOffset") }
+    var scrollOffset: CGFloat {
+        get { UserDefaults.standard.double(forKey: "scrollOffset.\(mode.rawValue)") }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "scrollOffset.\(mode.rawValue)") }
     }
     /// 键盘移动选中项后需要滚动到的行；token 保证同一行也能重复触发
     @Published private(set) var scrollRequest: ScrollRequest?
@@ -76,8 +92,24 @@ final class LauncherModel: ObservableObject {
 
     var inFolder: Bool { !folderPath.isEmpty }
 
-    /// 区分顶层和各个目录，视图据此给每一层一个独立的滚动视图
-    var levelKey: String { folderPath.map(String.init).joined(separator: ".") }
+    /// 当前目录的名字路径，例如 ["开发", "数据库"]
+    var folderNames: [String] {
+        folderPath.indices.compactMap { config.folder(at: Array(folderPath[...$0]))?.name }
+    }
+
+    /// 区分两种模式的顶层和各个目录，视图据此给每一层一个独立的滚动视图
+    var levelKey: String { mode.rawValue + ":" + folderPath.map(String.init).joined(separator: ".") }
+
+    /// 切换定制 / 顺序模式。在目录里时先回到顶层
+    func setMode(_ m: BrowseMode) {
+        guard m != mode else { return }
+        chosenMode = m
+        UserDefaults.standard.set(m.rawValue, forKey: "browseMode")
+        folderPath = []
+        showingIndex = false
+        rebuildBrowse()
+        selection = firstVisibleIndex()
+    }
 
     func openFolder(_ path: [Int]) {
         guard config.folder(at: path) != nil else { return }
@@ -117,12 +149,12 @@ final class LauncherModel: ObservableObject {
     var isBrowsing: Bool { query.trimmingCharacters(in: .whitespaces).isEmpty }
     var visibleCount: Int { isBrowsing ? browseItems.count : results.count }
 
+    /// 浏览网格的高度，始终按顶层内容算：进目录时面板不跟着变矮，和顶层保持一样高
+    private var browseHeight: CGFloat = Layout.gridHeight(headers: 0, rows: 0)
+
     var preferredHeight: CGFloat {
         let banner = configError == nil ? 0 : Layout.errorHeight
-        if isBrowsing {
-            let rows = entries.filter { !$0.indices.isEmpty }.count
-            return banner + Layout.gridHeight(headers: entries.count - rows, rows: rows)
-        }
+        if isBrowsing { return banner + browseHeight }
         return banner + Layout.listHeight(rows: max(results.count, 1))
     }
 
@@ -188,6 +220,7 @@ final class LauncherModel: ObservableObject {
 
     /// 配置变了（或重扫了应用）之后重算隐藏、固定、目录
     private func applyConfig() {
+        UsageLog.enabled = config.recordUsage ?? true
         shownApps = apps.filter { app in !config.hidden.contains(where: app.matches) }
         if config.folder(at: folderPath) == nil { folderPath = [] }
         rebuildBrowse()
@@ -222,6 +255,7 @@ final class LauncherModel: ObservableObject {
     /// 面板隐藏后调用：清掉搜索和索引层，让网格在看不见的时候就恢复好，下次打开直接显示
     func resetAfterHide() {
         query = ""
+        dragIndex = nil
         showingIndex = false
         if inFolder {
             folderPath = []
@@ -272,16 +306,141 @@ final class LauncherModel: ObservableObject {
         updateConfig { c in c.hidden.append(app.configRef) }
     }
 
-    /// 从当前打开的目录里移出，回到 A–Z 分组
+    /// 从当前打开的目录里移出，回到「应用」分组
     func removeFromFolder(_ app: AppItem) {
         let path = folderPath
-        updateConfig { c in
-            func edit(_ list: inout [FolderConfig], _ p: ArraySlice<Int>) {
-                guard let i = p.first, list.indices.contains(i) else { return }
-                if p.count == 1 { list[i].apps.removeAll(where: app.matches) }
-                else { edit(&list[i].folders, p.dropFirst()) }
+        updateConfig { c in c.editFolder(at: path) { $0.apps.removeAll(where: app.matches) } }
+    }
+
+    // MARK: - 拖动排序（定制模式）
+
+    var canReorder: Bool { mode == .custom && isBrowsing }
+    /// 正在拖动的格子当前所在的下标。拖动过程中只在内存里调整 browseItems，松手时才写回配置
+    @Published private(set) var dragIndex: Int?
+    /// 被拖格子左上角在网格里的位置，跟着鼠标走
+    @Published private(set) var dragOrigin: CGPoint = .zero
+    /// 按下时鼠标相对格子左上角的位置
+    private var grab: CGSize = .zero
+    /// 拖到网格外松手（取消）时恢复成这个顺序
+    private var dragSnapshot: [Tile] = []
+
+    /// 当前层滚动视图的偏移和可视高度，视图滚动时写入。只给拖动时自动滚动用，不发布
+    var viewportOffset: CGFloat = 0
+    var viewportHeight: CGFloat = 0
+    /// 自动滚动的目标偏移：视图把一个锚点放在这里并滚过去
+    @Published private(set) var autoScrollY: CGFloat = 0
+    private var autoScrollTimer: Timer?
+    /// 最近一次拖动的鼠标位置和网格几何。内容滚动后鼠标没动也要按新位置重新判断换位
+    private var lastDrag: (location: CGPoint, geo: GridGeometry)?
+
+    /// 格子的视图 id。同一个应用可能同时出现在「固定」和别的分组里，所以带上分组
+    func tileKey(_ i: Int) -> String { tileGroups[i] + "|" + browseItems[i].id }
+
+    /// 拖动中鼠标移到 location（网格坐标）。不用系统拖放：系统的拖动图像松手后还会停留几帧，
+    /// 和落位的格子叠成两个；这里格子本身跟着鼠标走，从头到尾只有一个
+    func drag(_ i: Int, start: CGPoint, location: CGPoint, geo: GridGeometry) {
+        guard canReorder else { return }
+        if dragIndex == nil {
+            guard browseItems.indices.contains(i) else { return }
+            dragSnapshot = browseItems
+            let o = geo.origins[i]
+            grab = CGSize(width: start.x - o.x, height: start.y - o.y)
+            dragIndex = i
+            selection = i
+            startAutoScroll()
+        }
+        guard let from = dragIndex else { return }
+        lastDrag = (location, geo)
+        dragOrigin = CGPoint(x: location.x - grab.width, y: location.y - grab.height)
+        // 按图标中心找目标格，并且要进到格子中间一圈才换位：按鼠标算时，鼠标停在行与行交界处，
+        // 目标会在上下两行之间来回跳，整排图标被反复挤来挤去
+        let center = CGPoint(x: dragOrigin.x + Layout.cellWidth / 2, y: dragOrigin.y + Layout.cellHeight / 2)
+        guard let to = geo.index(at: center, inset: 0.2), to != from,
+              tileGroups.indices.contains(to), tileGroups[from] == tileGroups[to] else { return }
+        var items = browseItems
+        items.insert(items.remove(at: from), at: to)
+        withAnimation(.spring(duration: 0.25, bounce: 0.1)) {
+            browseItems = items
+            dragIndex = to
+            selection = to
+        }
+    }
+
+    /// 松手：落在网格里就移进当前空位并写回配置，落到网格外就取消，恢复原来的顺序
+    func endDrag(location: CGPoint, inGrid: Bool) {
+        stopAutoScroll()
+        guard let i = dragIndex else { return }
+        let key = tileKey(i)
+        if inGrid { commitOrder(group: tileGroups[i]) }
+        withAnimation(.spring(duration: 0.3, bounce: 0.15)) {
+            if !inGrid { browseItems = dragSnapshot }
+            dragIndex = nil
+        }
+        // 写配置会走 refilter，把选中项重置成屏幕左上角第一格；拖动结束应该停在刚放下（或弹回）的格子上
+        selection = browseItems.indices.first { tileKey($0) == key } ?? selection
+    }
+
+    /// 拖到可视区域上下边缘附近时持续滚动，越靠边越快
+    private func startAutoScroll() {
+        autoScrollTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.autoScrollTick() }
+        }
+        // 拖动时 runloop 处在事件跟踪模式，默认模式的定时器不会触发
+        RunLoop.main.add(t, forMode: .common)
+        autoScrollTimer = t
+    }
+
+    private func stopAutoScroll() {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+        lastDrag = nil
+    }
+
+    private func autoScrollTick() {
+        guard let i = dragIndex, let (location, geo) = lastDrag, viewportHeight > 0 else { return }
+        // 网格坐标在内边距里面，换算成滚动内容的坐标
+        let y = location.y + Layout.padding - viewportOffset
+        let zone: CGFloat = 40, maxStep: CGFloat = 14
+        let step: CGFloat
+        if y < zone { step = -maxStep * min((zone - y) / zone, 1) }
+        else if y > viewportHeight - zone { step = maxStep * min((y - viewportHeight + zone) / zone, 1) }
+        else { return }
+        let maxOffset = max(geo.height + Layout.padding * 2 - viewportHeight, 0)
+        let target = min(max(viewportOffset + step, 0), maxOffset)
+        let delta = target - viewportOffset
+        guard abs(delta) >= 0.5 else { return }
+        // 先按预期更新，不等滚动回调，避免下一帧还按旧偏移算
+        viewportOffset = target
+        autoScrollY = target
+        // 内容滚了 delta，鼠标没动，它在网格里的位置也就跟着变了 delta
+        drag(i, start: .zero, location: CGPoint(x: location.x, y: location.y + delta), geo: geo)
+    }
+
+    /// 目录在 order 里的写法
+    static let folderRefPrefix = "folder:"
+
+    /// 把某个分组当前的顺序写回配置：固定写 pinned，顶层写 order，目录里写目录的 order
+    private func commitOrder(group: String) {
+        let tiles = tileGroups.indices.filter { tileGroups[$0] == group }.map { browseItems[$0] }
+        let apps = tiles.compactMap { if case .app(let a) = $0 { a } else { nil } }
+        /// 按新顺序排出引用。已有的引用原样保留写法，匹配不到应用的（卸载了或隐藏了的）留在末尾
+        func refs(_ old: [String]) -> [String] {
+            let listed = tiles.map { t -> String in
+                switch t {
+                case .app(let a): return old.first(where: a.matches) ?? a.configRef
+                case .folder(let name, _, _): return Self.folderRefPrefix + name
+                }
             }
-            edit(&c.folders, path[...])
+            return listed + old.filter { r in !r.hasPrefix(Self.folderRefPrefix) && !apps.contains { $0.matches(r) } }
+        }
+        let path = folderPath
+        updateConfig { c in
+            switch group {
+            case "固定": c.pinned = refs(c.pinned)
+            case "应用": c.order = refs(c.order)
+            default: c.editFolder(at: path) { $0.order = refs($0.order) }
+            }
         }
     }
 
@@ -339,9 +498,16 @@ final class LauncherModel: ObservableObject {
             case .folder(_, let path, _): openFolder(path); return
             case .app(let a): app = a
             }
+            if inFolder {
+                UsageLog.launched(app, via: "folder", folder: folderNames.joined(separator: "/"))
+            } else {
+                let pinnedSection = entries.first { $0.indices.contains(i) }?.id.hasPrefix("r:固定:") == true
+                UsageLog.launched(app, via: pinnedSection ? "pinned" : "grid")
+            }
         } else {
             guard results.indices.contains(i) else { return }
             app = results[i]
+            UsageLog.launched(app, via: "search", query: query.trimmingCharacters(in: .whitespaces))
         }
 
         let open = NSWorkspace.OpenConfiguration()
@@ -354,11 +520,13 @@ final class LauncherModel: ObservableObject {
 
     private func rebuildBrowse() {
         var items: [Tile] = []
+        var groups: [String] = []
         var entries: [GridEntry] = []
 
         func addRows(_ key: String, _ group: [Tile]) {
             let start = items.count
             items += group
+            groups += Array(repeating: key, count: group.count)
             for (n, s) in stride(from: start, to: items.count, by: Layout.columns).enumerated() {
                 let row = Array(s..<min(s + Layout.columns, items.count))
                 entries.append(GridEntry(id: "r:\(key):\(n)", kind: .row(row)))
@@ -369,29 +537,66 @@ final class LauncherModel: ObservableObject {
             entries.append(GridEntry(id: "h:\(title)", kind: .header(title)))
             addRows(title, group)
         }
-        func folderTiles(_ list: [FolderConfig], _ prefix: [Int]) -> [Tile] {
-            list.enumerated().map { i, f in
+        /// 目录和应用混排：order 里列出的按 order 排；没列出的目录按 folders 顺序排在前面，没列出的应用按给定顺序排在后面
+        func arrange(_ list: [FolderConfig], _ prefix: [Int], _ apps: [AppItem], _ order: [String]) -> [Tile] {
+            var folders: [Tile?] = list.enumerated().map { i, f in
                 .folder(name: f.name, path: prefix + [i], icons: resolve(f.apps).prefix(4).map(\.icon))
             }
+            var rest: [AppItem?] = apps
+            var out: [Tile] = []
+            for ref in order {
+                if ref.hasPrefix(Self.folderRefPrefix) {
+                    let name = String(ref.dropFirst(Self.folderRefPrefix.count))
+                    if let i = list.indices.first(where: { list[$0].name == name && folders[$0] != nil }) {
+                        out.append(folders[i]!)
+                        folders[i] = nil
+                    }
+                } else if let i = rest.firstIndex(where: { $0?.matches(ref) == true }) {
+                    out.append(.app(rest[i]!))
+                    rest[i] = nil
+                }
+            }
+            // 没列出的目录排最前（和以前目录在前的排法一致，旧配置升级后位置不变），没列出的应用排最后
+            return folders.compactMap { $0 } + out + rest.compactMap { $0.map(Tile.app) }
+        }
+        /// 排出某个模式的顶层，返回它的高度
+        func buildTop(_ m: BrowseMode) -> CGFloat {
+            items = []
+            entries = []
+            groups = []
+            add("固定", resolve(config.pinned).map(Tile.app))
+            switch m {
+            case .custom:
+                // 目录和没进任何目录的应用混排在同一组（固定的仍然出现在这里，固定只是快捷方式）。
+                // 按 order 排，没列出的（新装的）按名字排在后面
+                let filed = Set(config.allFolders().flatMap { resolve($0.folder.apps).map(\.id) })
+                let unfiled = shownApps.filter { !filed.contains($0.id) }
+                add("应用", arrange(config.folders, [], unfiled, config.order))
+            case .sorted:
+                // 全部应用按首字母分组，不管在不在目录里
+                let byLetter = Dictionary(grouping: shownApps, by: \.section)
+                for letter in byLetter.keys.sorted(by: { ($0 == "#" ? "~" : $0) < ($1 == "#" ? "~" : $1) }) {
+                    add(letter, byLetter[letter]!.map(Tile.app))
+                }
+            }
+            let rows = entries.filter { !$0.indices.isEmpty }.count
+            return Layout.gridHeight(headers: entries.count - rows, rows: rows)
         }
 
-        if inFolder, let folder = config.folder(at: folderPath) {
-            // 目录内：返回条 + 子目录 + 应用，按配置里的顺序
-            entries.append(GridEntry(id: "b:\(levelKey)", kind: .back(folder.name)))
-            addRows("f\(levelKey)", folderTiles(folder.folders, folderPath) + resolve(folder.apps).map(Tile.app))
-        } else {
-            add("固定", resolve(config.pinned).map(Tile.app))
-            add("目录", folderTiles(config.folders, []))
+        // 面板高度取两种模式顶层里高的那个：切模式、进目录时面板都不跟着变高变矮
+        let otherHeight = buildTop(mode.other)
+        browseHeight = max(buildTop(mode), otherHeight)
 
-            // 进了目录的应用不再出现在 A–Z 里（固定的仍然出现，固定只是快捷方式）
-            let filed = Set(config.allFolders().flatMap { resolve($0.folder.apps).map(\.id) })
-            let groups = Dictionary(grouping: shownApps.filter { !filed.contains($0.id) }, by: \.section)
-            for letter in groups.keys.sorted(by: { ($0 == "#" ? "~" : $0) < ($1 == "#" ? "~" : $1) }) {
-                add(letter, groups[letter]!.map(Tile.app))
-            }
+        if inFolder, let folder = config.folder(at: folderPath) {
+            // 目录内：返回条 + 子目录和应用混排，按目录的 order，没列出的子目录在前、应用按 apps 顺序
+            items = []
+            groups = []
+            entries = [GridEntry(id: "b:\(levelKey)", kind: .back(folder.name))]
+            addRows("f\(levelKey)", arrange(folder.folders, folderPath, resolve(folder.apps), folder.order))
         }
 
         browseItems = items
+        tileGroups = groups
         self.entries = entries
     }
 

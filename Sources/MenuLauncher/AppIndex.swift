@@ -50,8 +50,15 @@ enum AppIndex {
 
                 let icon = icons ? thumbnail(NSWorkspace.shared.icon(forFile: url.path)) : NSImage()
 
-                let terms = searchTerms(for: name)
-                items.append(AppItem(name: name, url: url, bundleID: Bundle(url: url)?.bundleIdentifier, icon: icon,
+                // 显示的是本地化名字（系统设置），也要能用原始名字搜（System Settings）：
+                // 文件名和 Info.plist 里未本地化的 CFBundleName / CFBundleDisplayName 都算别名
+                let bundle = Bundle(url: url)
+                let info = bundle?.infoDictionary
+                let aliases = [url.deletingPathExtension().lastPathComponent,
+                               info?["CFBundleDisplayName"] as? String, info?["CFBundleName"] as? String]
+                    .compactMap { $0 }
+                let terms = searchTerms(for: name, aliases: aliases)
+                items.append(AppItem(name: name, url: url, bundleID: bundle?.bundleIdentifier, icon: icon,
                                      keywords: terms.keywords, words: terms.words, sortKey: terms.sortKey))
             }
         }
@@ -75,14 +82,22 @@ enum AppIndex {
         return image
     }
 
-    static func searchTerms(for name: String) -> (keywords: [String], words: [String], sortKey: String) {
+    static func searchTerms(for name: String, aliases: [String] = []) -> (keywords: [String], words: [String], sortKey: String) {
         let lower = name.lowercased()
-        var words = lower.split(whereSeparator: { $0 == " " || $0 == "-" || $0 == "_" || $0 == "." }).map(String.init)
-        var keywords = [lower, lower.replacingOccurrences(of: " ", with: "")]
+        var words: [String] = []
+        var keywords: [String] = []
         var sortKey = lower
 
-        if words.count > 1 {
-            keywords.append(words.compactMap(\.first).map(String.init).joined()) // Visual Studio Code -> vsc
+        var seen = Set<String>()
+        for n in [name] + aliases {
+            let l = n.lowercased()
+            guard !l.isEmpty, seen.insert(l).inserted else { continue }
+            let w = l.split(whereSeparator: { $0 == " " || $0 == "-" || $0 == "_" || $0 == "." }).map(String.init)
+            keywords += [l, l.replacingOccurrences(of: " ", with: "")]
+            if w.count > 1 {
+                keywords.append(w.compactMap(\.first).map(String.init).joined()) // Visual Studio Code -> vsc
+            }
+            words += w
         }
 
         // 含非 ASCII（中文等）时转拼音：微信 -> weixin / wx

@@ -37,5 +37,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-codesign --force --sign - "$APP"
+# ad-hoc 签名默认的签名要求是二进制的 cdhash，每次编译都变，系统里的辅助功能授权就对不上了
+# （设置里显示已开，实际不生效，每次启动还会再弹授权）。改成按 bundle id 匹配，重新编译后授权仍然有效
+codesign --force --sign - -r='designated => identifier "local.menulauncher"' "$APP"
 echo "Built $APP"
