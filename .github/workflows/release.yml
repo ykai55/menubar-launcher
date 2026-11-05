@@ -1,0 +1,75 @@
+# 推送 vX.Y.Z tag 时自动发版：打通用二进制 DMG/zip → 建 GitHub Release → 更新 Homebrew tap 里的 cask。
+# 本地只需要 ./make-release.sh X.Y.Z（写 VERSION、提交、打 tag、推送）
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$(cat VERSION)" != "$VERSION" ]; then
+            echo "::error::VERSION 文件是 $(cat VERSION)，和 tag $GITHUB_REF_NAME 不一致"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          swift --version
+          ./make-dmg.sh
+          ditto -c -k --keepParent build/MenuLauncher.app build/MenuLauncher.zip
+          lipo -archs build/MenuLauncher.app/Contents/MacOS/MenuLauncher
+          build/MenuLauncher.app/Contents/MacOS/MenuLauncher --config-path
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## 安装
+
+          ```sh
+          brew install --cask ykai55/tap/menulauncher
+          ```
+
+          更新：`brew upgrade --cask menulauncher`
+
+          也可以下载下面的 MenuLauncher.dmg，把应用拖进「应用程序」。应用没有经过 Apple 公证，第一次打开前执行：
+
+          ```sh
+          xattr -dr com.apple.quarantine /Applications/MenuLauncher.app
+          ```
+
+          需要 macOS 15 或更高版本，同时支持 Apple 芯片和 Intel。
+          EOF
+          gh release create "$GITHUB_REF_NAME" build/MenuLauncher.dmg build/MenuLauncher.zip \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes
+
+      # tap 是另一个仓库，默认的 GITHUB_TOKEN 写不进去，用只对 tap 有写权限的 deploy key
+      - name: Update Homebrew cask
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o StrictHostKeyChecking=accept-new"
+          SHA=$(shasum -a 256 build/MenuLauncher.zip | cut -d' ' -f1)
+          git clone --depth 1 git@github.com:ykai55/homebrew-tap.git tap
+          sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" tap/Casks/menulauncher.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "menulauncher $VERSION"
+          git push
