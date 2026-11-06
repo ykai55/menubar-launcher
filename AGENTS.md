@@ -20,4 +20,7 @@ macOS 菜单栏下拉式应用启动器（Swift Package，SwiftUI + AppKit，无
 - 最低系统版本 macOS 15（用到 `onScrollGeometryChange`）；Info.plist 必须声明 `CFBundleLocalizations` 含中文，否则应用名会显示成英文
 - Safari 在 `/System/Cryptexes/App/System/Applications`，/Applications 下的是带 hidden 标志的符号链接，扫描时要单独加这个目录
 - 设计原则：利用空间记忆，应用位置稳定。不做使用频率等智能排序；配置里的顺序就是显示顺序
+- 本地化：`Localization.swift` 的 AppLanguage 支持 system / en / zh-Hans，配置缺省跟随系统；界面和 CLI 都要提供中英文。README.md 全英文，README.zh-CN.md 全中文（语言切换链接除外）。只翻译展示标签，固定 / 应用等内部 key 不变，不翻译用户目录名。
+- 设置：`SettingsView.swift` 是 AppDelegate 持有的独立原生窗口，齿轮、右键菜单或 ⌘, 打开。`PreferencesDraft` 保存时与窗口初始值比较，仅合并改动过的偏好到磁盘最新配置；先保存成功再 applyConfig，错误时不覆盖磁盘或应用内配置。新增配置或入口时同步两份 README 和 skill。
+- 原生控件点击测试：NSSwitch 等控件会在 mouseDown 内进入 tracking loop，不能顺序 sendEvent(down) 再 sendEvent(up)。先用 NSApp.postEvent 排队 mouseUp，再发送 mouseDown；SwiftUI 控件未消费的 mouseUp 由测试取出补发。SettingsWindowTests 覆盖两种语言下保存、取消、切页及鼠标触发添加。
 - 经验：不要绑定 `scrollPosition`（hover 刷新时会把列表拉回旧位置）；滚动中频繁变化的值不要 @Published；不要在 @Published 的 didSet 里再赋值

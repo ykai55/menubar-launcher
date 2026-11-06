@@ -34,7 +34,7 @@ struct LauncherView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField(model.showingHidden ? "搜索隐藏应用" : "搜索应用", text: $model.query)
+                TextField(model.showingHidden ? model.language.text("Search hidden apps", "搜索隐藏应用") : model.language.text("Search apps", "搜索应用"), text: $model.query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .focused($focused)
@@ -47,8 +47,14 @@ struct LauncherView: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .help(model.showingHidden ? "退出隐藏区" : "进入隐藏区")
-                .accessibilityLabel(model.showingHidden ? "退出隐藏区" : "进入隐藏区")
+                .help(model.showingHidden ? model.language.text("Leave hidden items", "退出隐藏区") : model.language.text("Show hidden items", "进入隐藏区"))
+                .accessibilityLabel(model.language.text("Hidden items", "隐藏区"))
+                Button { model.onOpenSettings?() } label: {
+                    Image(systemName: "gearshape").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain).focusable(false)
+                .help(model.language.text("Settings… (⌘,)", "设置…（⌘,）"))
+                .accessibilityLabel(model.language.text("Settings", "设置"))
             }
             .padding(.horizontal, 12)
             .frame(height: Layout.searchHeight)
@@ -72,6 +78,7 @@ struct LauncherView: View {
             }
         }
         .frame(width: Layout.width, alignment: .top)
+        .environment(\.launcherLanguage, model.language)
         .onAppear { focused = true }
         .onChange(of: model.showToken) { focused = true }
     }
@@ -124,7 +131,7 @@ struct LauncherView: View {
               .frame(minHeight: viewport.size.height, alignment: .top)
               .overlay(alignment: .top) {
                   if model.showingHidden && model.browseItems.isEmpty {
-                      Text(model.inFolder ? "此目录为空" : "没有隐藏的应用或目录")
+                      Text(model.inFolder ? model.language.text("This folder is empty", "此目录为空") : model.language.text("No hidden apps or folders", "没有隐藏的应用或目录"))
                           .font(.system(size: 13)).foregroundStyle(.secondary)
                           .padding(.top, Layout.headerHeight + 40)
                           .allowsHitTesting(false)
@@ -223,11 +230,11 @@ struct LauncherView: View {
                 if case .app(let app) = tile { menu(for: app) }
                 else if case .folder(_, let path, _) = tile {
                     if model.config.folder(at: path)?.hidden == true {
-                        Button("取消隐藏目录") { model.setFolderHidden(path, false) }
+                        Button(model.language.text("Unhide folder", "取消隐藏目录")) { model.setFolderHidden(path, false) }
                     } else if !model.showingHidden {
-                        Button("隐藏目录") { model.setFolderHidden(path, true) }
+                        Button(model.language.text("Hide folder", "隐藏目录")) { model.setFolderHidden(path, true) }
                     }
-                    Button("编辑配置文件…") { model.openConfig() }
+                    Button(model.language.text("Edit config…", "编辑配置文件…")) { model.openConfig() }
                 }
             }
             .overlay {
@@ -247,7 +254,7 @@ struct LauncherView: View {
     private var list: some View {
         VStack(spacing: 0) {
             if model.results.isEmpty {
-                Text("没有匹配的应用")
+                Text(model.language.text("No matching apps", "没有匹配的应用"))
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: Layout.rowHeight)
@@ -264,19 +271,19 @@ struct LauncherView: View {
 
     @ViewBuilder
     private func menu(for app: AppItem) -> some View {
-        Button(model.isPinned(app) ? "取消固定" : "固定到顶部") { model.togglePin(app) }
+        Button(model.isPinned(app) ? model.language.text("Unpin", "取消固定") : model.language.text("Pin to top", "固定到顶部")) { model.togglePin(app) }
         if model.inFolder && model.isBrowsing {
-            Button("移出目录") { model.removeFromFolder(app) }
+            Button(model.language.text("Remove from folder", "移出目录")) { model.removeFromFolder(app) }
         }
         if model.config.hidden.contains(where: app.matches) {
-            Button("取消隐藏") { model.unhide(app) }
+            Button(model.language.text("Unhide", "取消隐藏")) { model.unhide(app) }
         } else if model.showingHidden {
-            Text("随所在目录隐藏")
+            Text(model.language.text("Hidden with its folder", "随所在目录隐藏"))
         } else {
-            Button("隐藏") { model.hide(app) }
+            Button(model.language.text("Hide", "隐藏")) { model.hide(app) }
         }
         Divider()
-        Button("在 Finder 中显示") { model.revealInFinder(app) }
+        Button(model.language.text("Show in Finder", "在 Finder 中显示")) { model.revealInFinder(app) }
     }
 }
 
@@ -303,13 +310,14 @@ private struct DragScrollSurface: NSViewRepresentable {
 /// 网格里的分组标题，做成可点的小胶囊：hover 高亮，点击打开字母索引。
 /// 胶囊和下方图标之间留出间隙，避免误点到应用
 private struct SectionHeader: View {
+    @Environment(\.launcherLanguage) private var language
     let title: String
     let onTap: () -> Void
 
     @State private var hovered = false
 
     var body: some View {
-        Text(title)
+        Text(language.section(title))
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(hovered ? Color.white : Color.secondary)
             .padding(.horizontal, 10)
@@ -323,7 +331,7 @@ private struct SectionHeader: View {
                 hovered = inside && NSApp.currentEvent?.type != .scrollWheel
             }
             .onTapGesture(perform: onTap)
-            .help("点击选择首字母")
+            .help(language.text("Choose a letter", "点击选择首字母"))
             .padding(.leading, 4)
             .padding(.top, 8)
             .padding(.bottom, Layout.headerHeight - 22 - 8)
@@ -334,6 +342,7 @@ private struct SectionHeader: View {
 
 /// 目录顶部的返回条：点击或按 Esc / ⌫ 回到上一级
 private struct BackBar: View {
+    @Environment(\.launcherLanguage) private var language
     let name: String
     let onBack: () -> Void
 
@@ -353,7 +362,7 @@ private struct BackBar: View {
         .contentShape(Capsule())
         .onHover { hovered = $0 }
         .onTapGesture(perform: onBack)
-        .help("返回上一级")
+        .help(language.text("Go back", "返回上一级"))
         .padding(.leading, 4)
         .padding(.top, 8)
         .padding(.bottom, Layout.headerHeight - 22 - 8)
@@ -381,7 +390,7 @@ private struct Reorderable: ViewModifier {
                         .stroke(Color.accentColor, lineWidth: 2)
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.15)))
                         .overlay(alignment: .bottom) {
-                            Text("移入目录").font(.system(size: 10, weight: .medium))
+                            Text(model.language.text("Move inside", "移入目录")).font(.system(size: 10, weight: .medium))
                                 .padding(.horizontal, 4).background(.regularMaterial, in: Capsule())
                         }
                         .allowsHitTesting(false)
@@ -449,6 +458,7 @@ struct GridGeometry {
 
 /// 搜索框右侧的 定制 / 顺序 切换，Tab 键也能切。选中底板在两项之间滑动
 private struct ModeSwitch: View {
+    @Environment(\.launcherLanguage) private var language
     let mode: BrowseMode
     let onPick: (BrowseMode) -> Void
 
@@ -457,7 +467,7 @@ private struct ModeSwitch: View {
     var body: some View {
         HStack(spacing: 2) {
             ForEach([BrowseMode.custom, .sorted], id: \.self) { m in
-                Text(m.title)
+                Text(m.title(language))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(m == mode ? Color.white : Color.secondary)
                     .padding(.horizontal, 8)
@@ -474,13 +484,14 @@ private struct ModeSwitch: View {
         .padding(2)
         .background(Capsule().fill(Color.primary.opacity(0.06)))
         .animation(.spring(duration: 0.25, bounce: 0.15), value: mode)
-        .help("切换定制 / 顺序（Tab）。定制模式下可以拖动调整目录和应用的顺序")
+        .help(language.text("Switch Custom / A–Z (Tab). Drag to reorder in Custom mode.", "切换定制 / 顺序（Tab）。定制模式下可以拖动调整目录和应用的顺序"))
     }
 }
 
 /// 分组索引：固定位置排出各个分组，没有内容的置灰，位置不随应用增减变化。
 /// 顺序模式是 固定 / A–Z / #，定制模式是 固定 / 应用（目录和应用混排在「应用」里）
 private struct LetterIndex: View {
+    @Environment(\.launcherLanguage) private var language
     static func letters(for mode: BrowseMode) -> [String] {
         switch mode {
         case .custom: return ["固定", "应用"]
@@ -508,8 +519,9 @@ private struct LetterIndex: View {
                 ForEach(letters, id: \.self) { letter in
                     let enabled = available.contains(letter)
                     let isHovered = enabled && hovered == letter
-                    Text(letter)
+                    Text(language.section(letter))
                         .font(.system(size: letter.count > 1 ? 15 : 22, weight: .semibold))
+                        .minimumScaleFactor(0.7).lineLimit(1)
                         .frame(width: 56, height: 48)
                         .foregroundStyle(isHovered ? Color.white
                                          : enabled ? Color.primary : Color.secondary.opacity(0.35))

@@ -19,6 +19,7 @@ struct LauncherConfig: Codable, Equatable {
     /// 呼出面板的全局快捷键，例如 ["option+space"]。不写用默认的 ⌥Space，写 [] 表示不用快捷键。
     /// 也接受单个字符串
     var hotkey: [String]? = nil
+    var language: AppLanguage? = nil
 
     /// 实际生效的快捷键
     var shortcuts: [Shortcut] { (hotkey ?? Shortcut.defaults).map(Shortcut.init) }
@@ -32,6 +33,7 @@ struct LauncherConfig: Codable, Equatable {
         folders = try c.decodeIfPresent([FolderConfig].self, forKey: .folders) ?? []
         order = try c.decodeIfPresent([String].self, forKey: .order) ?? []
         recordUsage = try c.decodeIfPresent(Bool.self, forKey: .recordUsage)
+        language = try c.decodeIfPresent(AppLanguage.self, forKey: .language)
         mouse = try c.decodeIfPresent([MouseBinding].self, forKey: .mouse) ?? []
         if let one = try? c.decodeIfPresent(String.self, forKey: .hotkey) { hotkey = [one] }
         else { hotkey = try c.decodeIfPresent([String].self, forKey: .hotkey) }
@@ -204,7 +206,8 @@ enum ConfigStore {
 
     /// 文件不存在时返回 nil，格式错误时抛出
     static func load() throws -> LauncherConfig? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
         return try JSONDecoder().decode(LauncherConfig.self, from: data)
     }
 
@@ -220,18 +223,18 @@ enum ConfigStore {
     }
 
     /// 解码错误转成能看出位置的一句话
-    static func describe(_ error: Error) -> String {
+    static func describe(_ error: Error, language: AppLanguage = .system) -> String {
         func path(_ c: DecodingError.Context) -> String {
             c.codingPath.map { $0.intValue.map { "[\($0)]" } ?? ".\($0.stringValue)" }.joined()
         }
         switch error as? DecodingError {
         case .dataCorrupted(let c)?:
             let underlying = (c.underlyingError as NSError?)?.userInfo[NSDebugDescriptionErrorKey] as? String
-            return "JSON 格式错误：\(underlying ?? c.debugDescription)"
+            return language.text("Invalid JSON: ", "JSON 格式错误：") + (underlying ?? c.debugDescription)
         case .typeMismatch(_, let c)?, .valueNotFound(_, let c)?:
-            return "\(path(c)) 类型不对：\(c.debugDescription)"
+            return path(c) + language.text(" has the wrong type: ", " 类型不对：") + c.debugDescription
         case .keyNotFound(let key, let c)?:
-            return "\(path(c)) 缺少字段 \(key.stringValue)"
+            return path(c) + language.text(" missing field ", " 缺少字段 ") + key.stringValue
         default:
             return error.localizedDescription
         }

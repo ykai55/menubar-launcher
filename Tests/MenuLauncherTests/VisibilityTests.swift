@@ -140,15 +140,20 @@ final class VisibilityTests: XCTestCase {
             settle()
         }
         settle()
-        try click(NSPoint(x: 458, y: 541))
+        var openedSettings = false
+        model.onOpenSettings = { openedSettings = true }
+        try click(NSPoint(x: 462, y: 541))
+        XCTAssertTrue(openedSettings)
+        XCTAssertFalse(model.showingHidden)
+        try click(NSPoint(x: 438, y: 541))
         XCTAssertTrue(model.showingHidden)
         XCTAssertEqual(appNames(model), ["Delta"])
         try click(NSPoint(x: 30, y: 495))
         XCTAssertFalse(model.showingHidden)
         XCTAssertFalse(appNames(model).contains("Delta"))
-        try click(NSPoint(x: 458, y: 541))
+        try click(NSPoint(x: 438, y: 541))
         XCTAssertTrue(model.showingHidden)
-        try click(NSPoint(x: 458, y: 541))
+        try click(NSPoint(x: 438, y: 541))
         XCTAssertFalse(model.showingHidden)
     }
 

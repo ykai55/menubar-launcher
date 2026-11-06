@@ -7,6 +7,11 @@ struct MouseBinding: Codable, Equatable {
     /// "command" / "option" / "control" / "shift"，必须完全一致；省略表示不按修饰键
     var modifiers: [String] = []
 
+    init(button: ButtonRef, modifiers: [String] = []) {
+        self.button = button
+        self.modifiers = modifiers
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         button = try c.decode(ButtonRef.self, forKey: .button)
@@ -31,6 +36,16 @@ struct MouseBinding: Codable, Equatable {
 struct ButtonRef: Codable, Equatable {
     let number: Int?
     let raw: String
+
+    init(_ raw: String) {
+        self.raw = raw
+        switch raw.lowercased() {
+        case "middle": number = 2
+        case "back": number = 3
+        case "forward": number = 4
+        default: number = Int(raw)
+        }
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()

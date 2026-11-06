@@ -64,6 +64,8 @@ If the user doesn't want recording, set `"recordUsage": false` in the config. To
 
 ## Config format
 
+Settings are available through the gear beside search, the menu bar icon's **Settings…** menu, or ⌘, while the panel is open. General includes language and local usage recording; Shortcuts includes keyboard and mouse bindings. Save applies changes immediately to the same JSON file and merges only preferences changed in that window. `menulauncher --settings` opens settings on launch. Preserve these preferences when organizing apps.
+
 ```json
 {
   "pinned": ["com.apple.Safari", "com.tinyspeck.slackmacgap"],
@@ -81,6 +83,7 @@ If the user doesn't want recording, set `"recordUsage": false` in the config. To
 ```
 
 - Every key is optional.
+- `language`: `"system"` (default), `"en"`, or `"zh-Hans"`. Controls launcher UI and CLI messages; app names follow macOS and user folder names are unchanged. English documentation is in README.md and Chinese documentation in README.zh-CN.md.
 - An app reference can be a bundle id (preferred, because it survives the app moving), an absolute path starting with `/` or `~`, or the exact displayed name. Matching is case-insensitive.
 - `pinned`: shown in order at the top. Pinning is a shortcut, so a pinned app still appears in its folder or letter group.
 - Top-level `hidden`: app references excluded from ordinary browsing and search. They remain accessible in the hidden area, which also has its own app search. Remove a reference to restore the app.
@@ -92,7 +95,7 @@ If the user doesn't want recording, set `"recordUsage": false` in the config. To
 - `hotkey`: global shortcuts that open the panel under the menu bar icon. Defaults to `["option+space"]` when absent; `[]` turns keyboard shortcuts off. A single string is accepted.
   - Format: modifiers (`command`, `option`, `control`, `shift`) and one key joined by `+`, for example `"command+shift+l"`. Keys: `a`–`z`, `0`–`9`, `space`, `return`, `tab`, `escape`, `delete`, arrows (`left` / `right` / `up` / `down`), `home`, `end`, `pageup`, `pagedown`, `f1`–`f20`, and `` ` - = [ ] \ ; ' , . / ``. Letters follow the US key positions.
   - A key without modifiers is only allowed for F keys. `--check` warns about unknown or unsafe shortcuts, and the app ignores them.
-  - If another app already owns the combination, registering it silently fails; suggest a different one.
+  - If another app already owns the combination, Settings shows the registration failure; suggest a different one. Settings rejects invalid, unsafe, or duplicate shortcuts before saving.
 - `mouse`: mouse buttons that open the panel at the cursor, for example `[{"button": "back"}, {"button": "forward", "modifiers": ["option"]}]`.
   - `button` is `back`, `forward`, `middle`, or a button number (3 = back, 4 = forward, 5+ for extra buttons).
   - `modifiers` takes `command`, `option`, `control`, or `shift`, and must match exactly.

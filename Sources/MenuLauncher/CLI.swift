@@ -5,6 +5,7 @@ import Foundation
 ///   MenuLauncher --check       校验配置文件，报告 JSON 错误和找不到的应用
 ///   MenuLauncher --config-path 打印配置文件路径
 enum CLI {
+    private static var language: AppLanguage { ((try? ConfigStore.load())?.language) ?? .system }
     /// 处理了命令行参数就返回退出码，否则返回 nil 继续启动界面
     static func run(_ args: [String]) -> Int32? {
         switch args.first {
@@ -13,14 +14,23 @@ enum CLI {
         case "--config-path": print(ConfigStore.url.path); return 0
         case "--stats": return stats(days: args.count > 1 ? Int(args[1]) : nil)
         case "--help", "-h":
-            print("""
-            用法: MenuLauncher [--list-apps | --check | --config-path | --stats [天数]]
+            print(language.text("""
+            Usage: MenuLauncher [--list-apps | --check | --config-path | --stats [days] | --settings]
+              --list-apps    List installed apps and their pinned/hidden/folder state as JSON
+              --check        Validate \(ConfigStore.url.path)
+              --config-path  Print the config path
+              --stats [days] Summarize local usage as JSON; raw log: \(UsageLog.url.path)
+              --settings     Open settings
+            With no arguments, start the menu bar app. Saved configuration reloads automatically.
+            """, """
+            用法: MenuLauncher [--list-apps | --check | --config-path | --stats [天数] | --settings]
               --list-apps    以 JSON 列出已安装应用及其固定/隐藏/目录状态
               --check        校验 \(ConfigStore.url.path)
               --config-path  打印配置文件路径
               --stats [天数]  汇总本地使用记录（JSON），可只看最近 N 天；原始记录在 \(UsageLog.url.path)
+              --settings     打开设置面板
             不带参数时启动菜单栏界面。配置文件保存后界面会自动重新读取
-            """)
+            """))
             return 0
         default: return nil
         }
@@ -30,7 +40,7 @@ enum CLI {
         do {
             return try ConfigStore.load() ?? LauncherConfig()
         } catch {
-            FileHandle.standardError.write(Data("error: \(ConfigStore.describe(error))\n".utf8))
+            FileHandle.standardError.write(Data("error: \(ConfigStore.describe(error, language: language))\n".utf8))
             return nil
         }
     }
@@ -108,7 +118,7 @@ enum CLI {
 
     private static func check() -> Int32 {
         guard FileManager.default.fileExists(atPath: ConfigStore.url.path) else {
-            print("配置文件不存在：\(ConfigStore.url.path)（使用默认配置）")
+            print(language.text("Config not found (using defaults): ", "配置文件不存在（使用默认配置）：") + ConfigStore.url.path)
             return 0
         }
         guard let config = loadOrFail() else { return 1 }
@@ -117,25 +127,27 @@ enum CLI {
         var problems: [String] = []
         func verify(_ refs: [String], _ where_: String) {
             for r in refs where !apps.contains(where: { $0.matches(r) }) {
-                problems.append("\(where_): 找不到应用 \"\(r)\"")
+                problems.append("\(where_): " + language.text("App not found: ", "找不到应用：") + r)
             }
         }
         for s in config.shortcuts {
-            if !s.isValid { problems.append("hotkey: 无法识别 \"\(s.raw)\"，写法如 option+space、command+shift+l、f13") }
-            else if !s.isSafe { problems.append("hotkey: \"\(s.raw)\" 没有修饰键，只有 F1–F20 可以单独使用") }
+            if !s.isValid { problems.append("hotkey: \(s.raw) — " + language.text("Unknown shortcut; try option+space, command+shift+l or f13", "无法识别，写法如 option+space、command+shift+l、f13")) }
+            else if !s.isSafe { problems.append("hotkey: \(s.raw) — " + language.text("Only F1–F20 can be used without modifiers", "只有 F1–F20 可以不带修饰键")) }
         }
         for (i, m) in config.mouse.enumerated() {
-            if m.button.number == nil { problems.append("mouse[\(i)]: 无法识别的鼠标键 \"\(m.button.raw)\"，可用 back / forward / middle 或数字") }
-            if m.flags == nil { problems.append("mouse[\(i)]: 修饰键只能是 command / option / control / shift") }
-            if let n = m.button.number, n < 2, m.modifiers.isEmpty { problems.append("mouse[\(i)]: 左右键必须配合修饰键，否则会吞掉所有点击") }
+            if m.button.number == nil || (m.button.number ?? 0) < 0 {
+                problems.append("mouse[\(i)]: \(m.button.raw) — " + language.text("Use back / forward / middle or a nonnegative number", "可用 back / forward / middle 或非负数字"))
+            }
+            if m.flags == nil { problems.append("mouse[\(i)]: " + language.text("Modifiers must be command / option / control / shift", "修饰键只能是 command / option / control / shift")) }
+            if let n = m.button.number, n < 2, m.modifiers.isEmpty { problems.append("mouse[\(i)]: " + language.text("Left/right buttons require modifiers", "左右键必须配合修饰键，否则会吞掉所有点击")) }
         }
         verify(config.pinned, "pinned")
         verify(config.hidden, "hidden")
         var seenNames = Set<String>()
         for (names, folder) in config.allFolders() {
             let label = "folders/" + names.joined(separator: "/")
-            if folder.name.trimmingCharacters(in: .whitespaces).isEmpty { problems.append("\(label): 目录名为空") }
-            if !seenNames.insert(names.joined(separator: "/")).inserted { problems.append("\(label): 同级目录重名") }
+            if folder.name.trimmingCharacters(in: .whitespaces).isEmpty { problems.append("\(label): " + language.text("Empty folder name", "目录名为空")) }
+            if !seenNames.insert(names.joined(separator: "/")).inserted { problems.append("\(label): " + language.text("Duplicate sibling folder name", "同级目录重名")) }
             verify(folder.apps, label)
         }
 

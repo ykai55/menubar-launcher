@@ -48,7 +48,9 @@ enum Tile: Identifiable {
 enum BrowseMode: String {
     case custom, sorted
 
-    var title: String { self == .custom ? "定制" : "顺序" }
+    func title(_ language: AppLanguage) -> String {
+        self == .custom ? language.text("Custom", "定制") : language.text("A–Z", "顺序")
+    }
     var other: BrowseMode { self == .custom ? .sorted : .custom }
 }
 
@@ -75,6 +77,8 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var config = LauncherConfig()
     /// 配置文件读不出来时的错误，沿用上一次读到的配置
     @Published private(set) var configError: String?
+    @Published var failedShortcuts: [String] = []
+    var language: AppLanguage { config.language ?? .system }
     /// 当前打开的目录（配置里的下标路径），空表示在顶层
     @Published private(set) var folderPath: [Int] = []
     @Published private(set) var showingHidden = false
@@ -178,6 +182,18 @@ final class LauncherModel: ObservableObject {
     }
 
     var onLaunched: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
+
+    func savePreferences(_ draft: PreferencesDraft, baseline: PreferencesDraft) throws {
+        cancelDrag()
+        let latest = try ConfigStore.load() ?? LauncherConfig()
+        let updated = try draft.merging(into: latest, baseline: baseline)
+        try ConfigStore.save(updated)
+        config = updated
+        configDate = ConfigStore.modificationDate
+        configError = nil
+        applyConfig()
+    }
 
     private var apps: [AppItem] = []
     /// 去掉隐藏应用之后的，网格和搜索都只用它
@@ -220,7 +236,7 @@ final class LauncherModel: ObservableObject {
             }
             configError = nil
         } catch {
-            configError = ConfigStore.describe(error)
+            configError = ConfigStore.describe(error, language: language)
         }
         configDate = ConfigStore.modificationDate
         if dirWatcher == nil { watchConfig() }
@@ -291,7 +307,7 @@ final class LauncherModel: ObservableObject {
             try ConfigStore.save(config)
             configError = nil
         } catch {
-            configError = "保存配置失败：\(error.localizedDescription)"
+            configError = language.text("Could not save settings: ", "保存配置失败：") + error.localizedDescription
         }
         configDate = ConfigStore.modificationDate
         applyConfig()
@@ -825,7 +841,7 @@ final class LauncherModel: ObservableObject {
             browseHeight = Layout.searchHeight + 1 + Layout.maxGridHeight
             items = []
             groups = []
-            entries = [GridEntry(id: "b:hidden", kind: .back("隐藏区"))]
+            entries = [GridEntry(id: "b:hidden", kind: .back(language.text("Hidden items", "隐藏区")))]
             let roots = config.hiddenFolderRoots
             let folders: [Tile] = roots.map {
                 .folder(name: $0.folder.name, path: $0.path,

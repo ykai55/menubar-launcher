@@ -118,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mouseTrigger: MouseTrigger!
     private var keyMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
+    private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -134,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.onResignKey = { [weak self] in self?.hide() }
 
         model.onLaunched = { [weak self] in self?.hide() }
+        model.onOpenSettings = { [weak self] in self?.openSettings() }
         // objectWillChange 在属性改变前触发，放到下一轮 runloop 再读新高度
         model.objectWillChange
             .receive(on: RunLoop.main)
@@ -146,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] list in
                 // 左右键不带修饰键会吞掉所有普通点击，直接忽略（--check 会提示）
                 self?.mouseTrigger.bindings = list.compactMap { m in
-                    guard let n = m.button.number, let f = m.flags, n >= 2 || !f.isEmpty else { return nil }
+                    guard let n = m.button.number, n >= 0, let f = m.flags, n >= 2 || !f.isEmpty else { return nil }
                     return (n, f)
                 }
             }
@@ -158,15 +160,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] list in
                 // 先释放旧的再注册，同一个组合键才能重新注册上
                 self?.hotKeys = []
+                self?.model.failedShortcuts = []
                 self?.hotKeys = list.compactMap { s in
-                    HotKey(keyCode: s.keyCode!, modifiers: s.modifiers!) { [weak self] in
+                    let key = HotKey(keyCode: s.keyCode!, modifiers: s.modifiers!) { [weak self] in
                         MainActor.assumeIsolated { self?.toggle(trigger: "hotkey") }
                     }
+                    if key == nil { self?.model.failedShortcuts.append(s.raw) }
+                    return key
                 }
             }
             .store(in: &cancellables)
         model.loadConfig()
         model.reload()
+        model.$config.map(\.language).removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateMenus() }
+            .store(in: &cancellables)
+        updateMenus()
+        if CommandLine.arguments.contains("--settings") { openSettings() }
     }
 
     @objc private func statusItemClicked() {
@@ -179,10 +190,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showContextMenu() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "重新扫描应用", action: #selector(rescan), keyEquivalent: "r").target = self
-        menu.addItem(withTitle: "编辑配置文件…", action: #selector(editConfig), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: model.language.text("Settings…", "设置…"), action: #selector(openSettings), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: model.language.text("Rescan apps", "重新扫描应用"), action: #selector(rescan), keyEquivalent: "r").target = self
+        menu.addItem(withTitle: model.language.text("Edit config…", "编辑配置文件…"), action: #selector(editConfig), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: model.language.text("Quit", "退出"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
@@ -191,6 +203,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func rescan() { model.reload() }
 
     @objc private func editConfig() { model.openConfig() }
+
+    @objc func openSettings() {
+        hide()
+        model.cancelDrag()
+        if let window = settingsWindow, window.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let window = settingsWindow ?? NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 540),
+            styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.title = model.language.text("MenuLauncher Settings", "MenuLauncher 设置")
+        window.contentView = NSHostingView(rootView: SettingsView(model: model) { [weak window] in window?.close() })
+        if settingsWindow == nil { window.center() }
+        settingsWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func updateMenus() {
+        let language = model.language
+        settingsWindow?.title = language.text("MenuLauncher Settings", "MenuLauncher 设置")
+        let main = NSMenu()
+        let app = NSMenu()
+        app.addItem(withTitle: language.text("Settings…", "设置…"), action: #selector(openSettings), keyEquivalent: ",").target = self
+        app.addItem(withTitle: language.text("Quit MenuLauncher", "退出 MenuLauncher"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let appItem = NSMenuItem()
+        appItem.submenu = app
+        main.addItem(appItem)
+        let edit = NSMenu(title: language.text("Edit", "编辑"))
+        for (en, zh, selector, key) in [
+            ("Undo", "撤销", "undo:", "z"), ("Cut", "剪切", "cut:", "x"),
+            ("Copy", "复制", "copy:", "c"), ("Paste", "粘贴", "paste:", "v"),
+            ("Select All", "全选", "selectAll:", "a")
+        ] {
+            edit.addItem(withTitle: language.text(en, zh), action: Selector(selector), keyEquivalent: key)
+        }
+        let redo = edit.addItem(withTitle: language.text("Redo", "重做"), action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        let editItem = NSMenuItem()
+        editItem.submenu = edit
+        main.addItem(editItem)
+        NSApp.mainMenu = main
+    }
 
     private func toggle(trigger: String) {
         panel.isVisible && !hiding ? hide() : show(trigger: trigger)
@@ -277,6 +335,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, event.window === self.panel else { return event }
             // 应用没有菜单栏，"编辑"菜单里的 ⌘A / ⌘C / ⌘V / ⌘X / ⌘Z 不会生效，这里手动转给输入框
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags == .command && event.charactersIgnoringModifiers == "," {
+                self.openSettings()
+                return nil
+            }
             if flags == .command || flags == [.command, .shift] {
                 let action: Selector? = switch (event.charactersIgnoringModifiers?.lowercased(), flags.contains(.shift)) {
                 case ("a", false): #selector(NSText.selectAll(_:))

@@ -1,11 +1,14 @@
 # MenuLauncher
 
-A macOS menu bar dropdown app launcher. Press ⌥Space or click the menu bar icon to get an icon grid with a fixed layout. It has two modes, switched with the toggle next to the search box or Tab: **定制 (custom)** shows pinned apps, a divider, then your folders mixed with unfiled apps, without section titles or an index. You can drag folders and apps to reorder them within their section. **顺序 (sorted)** shows 固定 then visible apps A–Z by name (Chinese names sort by pinyin), ignoring folder hierarchy. There is no usage-based sorting, so apps stay where you remember them.
+English | [简体中文](README.zh-CN.md)
+
+A macOS menu bar dropdown app launcher. Press ⌥Space or click the menu bar icon to get an icon grid with a fixed layout. It has two modes, switched with the toggle next to the search box or Tab: **Custom** shows pinned apps, a divider, then your folders mixed with unfiled apps, without section titles or an index. You can drag folders and apps to reorder them within their section. **A–Z** shows Pinned then visible apps by name (Chinese names sort by pinyin), ignoring folder hierarchy. There is no usage-based sorting, so apps stay where you remember them.
 
 - Type to search by name, pinyin (`weixin`), initials (`wx`, `vsc`)
 - In sorted mode, click a section header to jump to a letter
 - Pin and hide apps, organize them into nested folders, or hide whole folders
 - Open the hidden area with the eye-slash button beside search to browse, launch, and restore hidden items
+- Choose English, Simplified Chinese, or your system language in Settings
 - Your AI agent can organize everything for you: the layout is a plain JSON file, and an [agent skill](skills/menulauncher/SKILL.md) is included
 
 Requires macOS 15+. Universal binary (Apple silicon + Intel).
@@ -27,23 +30,23 @@ xattr -dr com.apple.quarantine /Applications/MenuLauncher.app
 
 ## Organize
 
-Use the right-click menu on an app (固定 / 隐藏 / 移出目录), or edit `~/.config/menulauncher/config.json`. The app reloads the file on save:
+Use the right-click menu on an app (Pin to top / Hide / Remove from folder), or edit `~/.config/menulauncher/config.json`. The app reloads the file on save:
 
 ```json
 {
   "pinned": ["com.apple.Safari"],
   "hidden": ["com.apple.Chess"],
   "folders": [
-    { "name": "开发", "apps": ["com.apple.Terminal"], "folders": [{ "name": "数据库", "apps": [] }] }
+    { "name": "Development", "apps": ["com.apple.Terminal"], "folders": [{ "name": "Databases", "apps": [] }] }
   ]
 }
 ```
 
-Right-click a folder and choose **隐藏目录**, or add `"hidden": true` to that folder object. This hides the folder, its descendants, and their apps from ordinary browsing and search, including pinned shortcuts. The hidden area lists hidden folders and individually hidden apps; search there covers hidden apps. Use **取消隐藏目录** or **取消隐藏** in its right-click menus to restore items. Apps hidden through a folder become visible when that folder is restored; independently hidden apps keep their own hidden setting. Existing folder membership and ordering are preserved.
+Right-click a folder and choose **Hide folder**, or add `"hidden": true` to that folder object. This hides the folder, its descendants, and their apps from ordinary browsing and search, including pinned shortcuts. The hidden area lists hidden folders and individually hidden apps; search there covers hidden apps. Use **Unhide folder** or **Unhide** in its right-click menus to restore items. Apps hidden through a folder become visible when that folder is restored; independently hidden apps keep their own hidden setting. Existing folder membership and ordering are preserved.
 
 In the hidden area, the back bar, Esc, Backspace, or a blank-area click returns one level. Closing the panel exits the hidden area.
 
-In custom mode, folder centers and edges have different drag actions. Hold over the center for about 0.4 seconds, then release after the **移入目录** highlight to move inside. Near an edge, an insertion line shows where the item will go; hold for about 0.18 seconds to preview reordering, or release immediately to insert. Briefly crossing an edge does not push the folder away. Moving away cancels the pending action. Items moved inside are appended after existing contents. Pinned shortcuts remain pinned, and folders keep their subtrees. A folder cannot move into itself, its descendants, or a destination with a child folder of the same name.
+In custom mode, folder centers and edges have different drag actions. Hold over the center for about 0.4 seconds, then release after the **Move inside** highlight to move inside. Near an edge, an insertion line shows where the item will go; hold for about 0.18 seconds to preview reordering, or release immediately to insert. Briefly crossing an edge does not push the folder away. Moving away cancels the pending action. Items moved inside are appended after existing contents. Pinned shortcuts remain pinned, and folders keep their subtrees. A folder cannot move into itself, its descendants, or a destination with a child folder of the same name.
 
 App references can be bundle ids, paths, or display names. Helper commands (the cask links `menulauncher` into your PATH):
 
@@ -53,7 +56,18 @@ menulauncher --check       # validate the config
 menulauncher --stats 30    # usage summary for the last 30 days (JSON)
 ```
 
-### Shortcut
+## Settings
+
+Click the gear beside search, right-click the menu bar icon and choose **Settings…**, or press **⌘,** while the panel is open. `menulauncher --settings` opens settings when launching the app.
+
+- **General**: choose a language, enable or disable local usage recording, open the JSON config, and rescan installed apps.
+- **Shortcuts**: edit keyboard shortcuts (one per line), add or remove mouse triggers, and open Accessibility settings.
+
+Click **Save** or press **⌘S** to apply changes immediately. **Cancel** discards unsaved changes. Invalid shortcuts and mouse bindings are rejected; keyboard registration failures are shown in the window. Saving merges only the preferences you changed into the latest config, preserving external changes to folders, pins, hidden items, and ordering.
+
+The optional `language` field accepts `"system"` (default), `"en"`, or `"zh-Hans"`. System mode chooses Chinese or English from your preferred languages and falls back to English. Language changes affect the launcher interface and CLI messages; installed app names follow macOS, and custom folder names remain as entered. Existing configs work without adding this field.
+
+### Keyboard shortcuts
 
 The panel opens with ⌥Space by default. Change it, add more, or turn it off with `hotkey`:
 
@@ -79,7 +93,7 @@ Panel opens and app launches (with how each app was reached: pinned, grid, folde
 
 ### Let your agent do it
 
-Install the skill, then ask your agent something like "把开发相关的应用放进一个「开发」目录，隐藏国际象棋" or "按我最近一个月的使用情况整理一下固定区":
+Install the skill, then ask your agent something like "Move development apps into a Development folder and hide Chess" or "Organize my pinned apps based on the last month of usage":
 
 ```sh
 npx skills add ykai55/menubar-launcher
