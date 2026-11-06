@@ -73,9 +73,14 @@ final class DragTests: XCTestCase {
         XCTAssertEqual(model.dragOrigin.y - scroll.contentView.bounds.minY, screenOrigin, accuracy: 1)
 
         // 静止在底边继续滚动，到内容末尾必须停住。
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let expectedBottom = geo.height + Layout.padding * 2 - scroll.contentView.bounds.height
+        let deadline = Date().addingTimeInterval(3)
+        // CI 的定时器调度可能晚一帧，等待实际到达边界而非假设固定帧数。
+        while scroll.contentView.bounds.minY < expectedBottom - 1 && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
         let bottom = scroll.contentView.bounds.minY
-        XCTAssertEqual(bottom, geo.height + Layout.padding * 2 - scroll.contentView.bounds.height, accuracy: 1)
+        XCTAssertEqual(bottom, expectedBottom, accuracy: 1)
 
         // 向上拖到顶边，必须反向滚动，图标也应留在指针下。
         let topEdge = CGPoint(x: start.x, y: bottom - Layout.padding + 5)
