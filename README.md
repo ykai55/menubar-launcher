@@ -1,10 +1,11 @@
 # MenuLauncher
 
-A macOS menu bar dropdown app launcher. Press ⌥Space or click the menu bar icon to get an icon grid with a fixed layout. It has two modes, switched with the toggle next to the search box or Tab: **定制 (custom)** shows 固定 (pinned) apps, then your folders mixed with apps not in any folder (应用), and you can drag folders and apps to reorder them freely within their section; **顺序 (sorted)** shows 固定 then every app A–Z by name (Chinese names sort by pinyin), ignoring folders. There is no usage-based sorting, so apps stay where you remember them.
+A macOS menu bar dropdown app launcher. Press ⌥Space or click the menu bar icon to get an icon grid with a fixed layout. It has two modes, switched with the toggle next to the search box or Tab: **定制 (custom)** shows pinned apps, a divider, then your folders mixed with unfiled apps, without section titles or an index. You can drag folders and apps to reorder them within their section. **顺序 (sorted)** shows 固定 then visible apps A–Z by name (Chinese names sort by pinyin), ignoring folder hierarchy. There is no usage-based sorting, so apps stay where you remember them.
 
 - Type to search by name, pinyin (`weixin`), initials (`wx`, `vsc`)
-- Click a section header to jump to a letter
-- Pin, hide, and group apps into nested folders
+- In sorted mode, click a section header to jump to a letter
+- Pin and hide apps, organize them into nested folders, or hide whole folders
+- Open the hidden area with the eye-slash button beside search to browse, launch, and restore hidden items
 - Your AI agent can organize everything for you: the layout is a plain JSON file, and an [agent skill](skills/menulauncher/SKILL.md) is included
 
 Requires macOS 15+. Universal binary (Apple silicon + Intel).
@@ -37,6 +38,12 @@ Use the right-click menu on an app (固定 / 隐藏 / 移出目录), or edit `~/
   ]
 }
 ```
+
+Right-click a folder and choose **隐藏目录**, or add `"hidden": true` to that folder object. This hides the folder, its descendants, and their apps from ordinary browsing and search, including pinned shortcuts. The hidden area lists hidden folders and individually hidden apps; search there covers hidden apps. Use **取消隐藏目录** or **取消隐藏** in its right-click menus to restore items. Apps hidden through a folder become visible when that folder is restored; independently hidden apps keep their own hidden setting. Existing folder membership and ordering are preserved.
+
+In the hidden area, the back bar, Esc, Backspace, or a blank-area click returns one level. Closing the panel exits the hidden area.
+
+In custom mode, folder centers and edges have different drag actions. Hold over the center for about 0.4 seconds, then release after the **移入目录** highlight to move inside. Near an edge, an insertion line shows where the item will go; hold for about 0.18 seconds to preview reordering, or release immediately to insert. Briefly crossing an edge does not push the folder away. Moving away cancels the pending action. Items moved inside are appended after existing contents. Pinned shortcuts remain pinned, and folders keep their subtrees. A folder cannot move into itself, its descendants, or a destination with a child folder of the same name.
 
 App references can be bundle ids, paths, or display names. Helper commands (the cask links `menulauncher` into your PATH):
 

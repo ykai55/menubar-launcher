@@ -5,6 +5,7 @@ import SwiftUI
 struct GridEntry: Identifiable {
     enum Kind {
         case header(String)
+        case divider
         /// 目录里顶部的返回条，显示当前目录名
         case back(String)
         /// 若干个下标，指向 browseItems
@@ -16,6 +17,14 @@ struct GridEntry: Identifiable {
     var indices: [Int] {
         if case .row(let r) = kind { return r }
         return []
+    }
+
+    var height: CGFloat {
+        switch kind {
+        case .header, .back: return Layout.headerHeight
+        case .divider: return Layout.dividerHeight
+        case .row: return Layout.cellHeight
+        }
     }
 }
 
@@ -54,7 +63,7 @@ struct ScrollRequest: Equatable {
 final class LauncherModel: ObservableObject {
     static let maxResults = 10
 
-    @Published var query = "" { didSet { refilter() } }
+    @Published var query = "" { didSet { cancelDrag(); refilter() } }
     /// 搜索模式下的结果
     @Published private(set) var results: [AppItem] = []
     /// 浏览模式（空查询）下的全部格子，按显示顺序
@@ -68,6 +77,8 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var configError: String?
     /// 当前打开的目录（配置里的下标路径），空表示在顶层
     @Published private(set) var folderPath: [Int] = []
+    @Published private(set) var showingHidden = false
+    private var hiddenRootPath: [Int]?
     @Published var selection = 0
     /// 用户选过的模式；没选过时有目录就用定制模式，否则用顺序模式
     @Published private var chosenMode = UserDefaults.standard.string(forKey: "browseMode").flatMap(BrowseMode.init)
@@ -91,6 +102,8 @@ final class LauncherModel: ObservableObject {
     }
 
     var inFolder: Bool { !folderPath.isEmpty }
+    var canGoBack: Bool { inFolder || showingHidden }
+    var canShowIndex: Bool { mode == .sorted && !showingHidden && !inFolder }
 
     /// 当前目录的名字路径，例如 ["开发", "数据库"]
     var folderNames: [String] {
@@ -98,13 +111,29 @@ final class LauncherModel: ObservableObject {
     }
 
     /// 区分两种模式的顶层和各个目录，视图据此给每一层一个独立的滚动视图
-    var levelKey: String { mode.rawValue + ":" + folderPath.map(String.init).joined(separator: ".") }
+    var levelKey: String {
+        (showingHidden ? "hidden:" : "") + mode.rawValue + ":" + folderPath.map(String.init).joined(separator: ".")
+    }
+
+    func setShowingHidden(_ hidden: Bool) {
+        cancelDrag()
+        query = ""
+        showingHidden = hidden
+        hiddenRootPath = nil
+        folderPath = []
+        showingIndex = false
+        rebuildBrowse()
+        refilter()
+    }
 
     /// 切换定制 / 顺序模式。在目录里时先回到顶层
     func setMode(_ m: BrowseMode) {
         guard m != mode else { return }
+        cancelDrag()
         chosenMode = m
         UserDefaults.standard.set(m.rawValue, forKey: "browseMode")
+        showingHidden = false
+        hiddenRootPath = nil
         folderPath = []
         showingIndex = false
         rebuildBrowse()
@@ -113,6 +142,9 @@ final class LauncherModel: ObservableObject {
 
     func openFolder(_ path: [Int]) {
         guard config.folder(at: path) != nil else { return }
+        guard showingHidden || !config.isFolderHidden(at: path) else { return }
+        cancelDrag()
+        if showingHidden && !inFolder { hiddenRootPath = path }
         folderPath = path
         rebuildBrowse()
         selection = 0
@@ -121,8 +153,16 @@ final class LauncherModel: ObservableObject {
     /// 回到上一级目录；已在顶层时返回 false
     @discardableResult
     func leaveFolder() -> Bool {
-        guard inFolder else { return false }
-        folderPath.removeLast()
+        guard canGoBack else { return false }
+        cancelDrag()
+        if !inFolder {
+            setShowingHidden(false)
+            return true
+        }
+        if showingHidden && folderPath == hiddenRootPath {
+            folderPath = []
+            hiddenRootPath = nil
+        } else { folderPath.removeLast() }
         rebuildBrowse()
         selection = inFolder ? 0 : firstVisibleIndex()
         return true
@@ -131,6 +171,7 @@ final class LauncherModel: ObservableObject {
     /// 跳到某个分组：标题贴顶，选中该组第一个应用
     func jump(to title: String) {
         showingIndex = false
+        guard canShowIndex else { return }
         guard let h = entries.firstIndex(where: { $0.id == "h:\(title)" }) else { return }
         if let first = entries[h...].lazy.compactMap(\.indices.first).first { selection = first }
         scrollRequest = ScrollRequest(rowID: entries[h].id, anchor: .top, token: (scrollRequest?.token ?? 0) + 1)
@@ -158,8 +199,9 @@ final class LauncherModel: ObservableObject {
         return banner + Layout.listHeight(rows: max(results.count, 1))
     }
 
-    func reload() {
-        apps = AppIndex.scan()
+    func reload(apps scanned: [AppItem]? = nil) {
+        cancelDrag()
+        apps = scanned ?? AppIndex.scan()
         lastScan = Date()
         applyConfig()
     }
@@ -214,17 +256,32 @@ final class LauncherModel: ObservableObject {
         watchFile()
         let date = ConfigStore.modificationDate
         guard date != configDate else { return }
+        cancelDrag()
         loadConfig()
         applyConfig()
     }
 
     /// 配置变了（或重扫了应用）之后重算隐藏、固定、目录
     private func applyConfig() {
+        let selectedKey = isBrowsing && browseItems.indices.contains(selection) ? tileKey(selection) : nil
+        let selectedResult = !isBrowsing && results.indices.contains(selection) ? results[selection].id : nil
         UsageLog.enabled = config.recordUsage ?? true
-        shownApps = apps.filter { app in !config.hidden.contains(where: app.matches) }
+        let hiddenRefs = config.hidden + config.hiddenFolderAppRefs
+        shownApps = apps.filter { app in !hiddenRefs.contains(where: app.matches) }
         if config.folder(at: folderPath) == nil { folderPath = [] }
+        if !showingHidden && config.isFolderHidden(at: folderPath) { folderPath = [] }
+        if showingHidden, let root = hiddenRootPath, !config.isFolderHidden(at: root) {
+            folderPath = []
+            hiddenRootPath = nil
+        }
         rebuildBrowse()
-        refilter()
+        refilter(resetSelection: false)
+        if isBrowsing {
+            selection = selectedKey.flatMap { key in browseItems.indices.first { tileKey($0) == key } }
+                ?? firstVisibleIndex()
+        } else {
+            selection = selectedResult.flatMap { id in results.firstIndex { $0.id == id } } ?? 0
+        }
     }
 
     /// 从界面改配置：改完立即生效并写回文件
@@ -241,9 +298,10 @@ final class LauncherModel: ObservableObject {
         selection = min(selection, max(visibleCount - 1, 0))
     }
 
-    private func resolve(_ refs: [String]) -> [AppItem] {
+    private func resolve(_ refs: [String], includeHidden: Bool = false) -> [AppItem] {
         var seen = Set<String>()
-        return refs.compactMap { ref in shownApps.first(where: { $0.matches(ref) }) }
+        let source = includeHidden ? apps : shownApps
+        return refs.compactMap { ref in source.first(where: { $0.matches(ref) }) }
             .filter { seen.insert($0.id).inserted }
     }
 
@@ -254,10 +312,12 @@ final class LauncherModel: ObservableObject {
 
     /// 面板隐藏后调用：清掉搜索和索引层，让网格在看不见的时候就恢复好，下次打开直接显示
     func resetAfterHide() {
+        cancelDrag()
         query = ""
-        dragIndex = nil
         showingIndex = false
-        if inFolder {
+        if canGoBack {
+            showingHidden = false
+            hiddenRootPath = nil
             folderPath = []
             rebuildBrowse()
         }
@@ -270,10 +330,10 @@ final class LauncherModel: ObservableObject {
 
     /// 选中项落在当前可见的第一整行，避免回车启动一个看不见的应用
     private func firstVisibleIndex() -> Int {
-        guard !inFolder else { return 0 }
+        guard !inFolder && !showingHidden else { return 0 }
         var y = Layout.padding
         for e in entries {
-            let h = e.indices.isEmpty ? Layout.headerHeight : Layout.cellHeight
+            let h = e.height
             if let first = e.indices.first, y >= scrollOffset - 1 { return first }
             y += h
         }
@@ -284,7 +344,7 @@ final class LauncherModel: ObservableObject {
     func entryIDForSavedOffset() -> String? {
         var y = Layout.padding
         for e in entries {
-            let h = e.indices.isEmpty ? Layout.headerHeight : Layout.cellHeight
+            let h = e.height
             if scrollOffset < y + h / 2 { return e.id }
             y += h
         }
@@ -303,7 +363,18 @@ final class LauncherModel: ObservableObject {
     }
 
     func hide(_ app: AppItem) {
-        updateConfig { c in c.hidden.append(app.configRef) }
+        updateConfig { c in
+            if !c.hidden.contains(where: app.matches) { c.hidden.append(app.configRef) }
+        }
+    }
+
+    func unhide(_ app: AppItem) {
+        updateConfig { $0.hidden.removeAll(where: app.matches) }
+    }
+
+    func setFolderHidden(_ path: [Int], _ hidden: Bool) {
+        cancelDrag()
+        updateConfig { $0.editFolder(at: path) { $0.hidden = hidden } }
     }
 
     /// 从当前打开的目录里移出，回到「应用」分组
@@ -314,7 +385,7 @@ final class LauncherModel: ObservableObject {
 
     // MARK: - 拖动排序（定制模式）
 
-    var canReorder: Bool { mode == .custom && isBrowsing }
+    var canReorder: Bool { mode == .custom && isBrowsing && !showingHidden }
     /// 正在拖动的格子当前所在的下标。拖动过程中只在内存里调整 browseItems，松手时才写回配置
     @Published private(set) var dragIndex: Int?
     /// 被拖格子左上角在网格里的位置，跟着鼠标走
@@ -323,15 +394,26 @@ final class LauncherModel: ObservableObject {
     private var grab: CGSize = .zero
     /// 拖到网格外松手（取消）时恢复成这个顺序
     private var dragSnapshot: [Tile] = []
+    /// 中央停留 0.4 秒移入；边缘显示插入线，短暂停留或松手排序。
+    @Published private(set) var folderDropTarget: Int?
+    private var folderHover: (index: Int, since: TimeInterval)?
+    static let folderDropDelay: TimeInterval = 0.4
+    struct FolderInsertion: Equatable {
+        let index: Int
+        let after: Bool
+    }
+    @Published private(set) var folderInsertion: FolderInsertion?
+    private var insertionSince: TimeInterval = 0
+    static let folderInsertionDelay: TimeInterval = 0.18
 
     /// 当前层滚动视图的偏移和可视高度，视图滚动时写入。只给拖动时自动滚动用，不发布
     var viewportOffset: CGFloat = 0
     var viewportHeight: CGFloat = 0
-    /// 自动滚动的目标偏移：视图把一个锚点放在这里并滚过去
-    @Published private(set) var autoScrollY: CGFloat = 0
+    /// 网格中的 AppKit 探针，只弱引用；滚动时以 NSClipView 的实际偏移为准。
+    weak var dragSurface: NSView?
     private var autoScrollTimer: Timer?
     /// 最近一次拖动的鼠标位置和网格几何。内容滚动后鼠标没动也要按新位置重新判断换位
-    private var lastDrag: (location: CGPoint, geo: GridGeometry)?
+    private var lastDrag: (location: CGPoint, geo: GridGeometry, offset: CGFloat)?
 
     /// 格子的视图 id。同一个应用可能同时出现在「固定」和别的分组里，所以带上分组
     func tileKey(_ i: Int) -> String { tileGroups[i] + "|" + browseItems[i].id }
@@ -350,13 +432,50 @@ final class LauncherModel: ObservableObject {
             startAutoScroll()
         }
         guard let from = dragIndex else { return }
-        lastDrag = (location, geo)
+        let offset = dragSurface?.enclosingScrollView?.contentView.bounds.minY ?? viewportOffset
+        lastDrag = (location, geo, offset)
         dragOrigin = CGPoint(x: location.x - grab.width, y: location.y - grab.height)
         // 按图标中心找目标格，并且要进到格子中间一圈才换位：按鼠标算时，鼠标停在行与行交界处，
         // 目标会在上下两行之间来回跳，整排图标被反复挤来挤去
         let center = CGPoint(x: dragOrigin.x + Layout.cellWidth / 2, y: dragOrigin.y + Layout.cellHeight / 2)
+        if let to = folderCandidate(at: location, from: from, geo: geo) {
+            let origin = geo.origins[to]
+            let x = location.x - origin.x, y = location.y - origin.y
+            let central = x >= Layout.cellWidth * 0.25 && x <= Layout.cellWidth * 0.75
+                && y >= Layout.cellHeight * 0.2 && y <= Layout.cellHeight * 0.8
+            if central {
+                clearFolderInsertion()
+                if folderHover?.index != to {
+                    folderHover = (to, ProcessInfo.processInfo.systemUptime)
+                    folderDropTarget = nil
+                }
+                updateFolderDropReadiness()
+            } else {
+                clearFolderDrop()
+                if tileGroups[from] == tileGroups[to] {
+                    let after = y < Layout.cellHeight * 0.2 ? false :
+                        (y > Layout.cellHeight * 0.8 ? true : x > Layout.cellWidth / 2)
+                    let insertion = FolderInsertion(index: to, after: after)
+                    if folderInsertion != insertion {
+                        folderInsertion = insertion
+                        insertionSince = ProcessInfo.processInfo.systemUptime
+                    }
+                    applyFolderInsertion()
+                } else { clearFolderInsertion() }
+            }
+            return
+        }
+        clearFolderDrop()
+        clearFolderInsertion()
         guard let to = geo.index(at: center, inset: 0.2), to != from,
               tileGroups.indices.contains(to), tileGroups[from] == tileGroups[to] else { return }
+        // 图标中心可能比光标先到达目录。保留目标位置，等光标进入后开始计时，
+        // 否则排序会先把目录挤开，正常的连续轨迹永远到不了停留区域。
+        if canDropIntoFolder(to, from: from) { return }
+        reorderDrag(from: from, to: to)
+    }
+
+    private func reorderDrag(from: Int, to: Int) {
         var items = browseItems
         items.insert(items.remove(at: from), at: to)
         withAnimation(.spring(duration: 0.25, bounce: 0.1)) {
@@ -366,9 +485,68 @@ final class LauncherModel: ObservableObject {
         }
     }
 
+    private func folderCandidate(at point: CGPoint, from: Int, geo: GridGeometry) -> Int? {
+        guard let to = geo.index(at: point), canDropIntoFolder(to, from: from) else { return nil }
+        let rect = CGRect(origin: geo.origins[to], size: CGSize(width: Layout.cellWidth, height: Layout.cellHeight))
+        // 使用整个格子，确保连续接近时先锁住目录；不把行尾空白当作最后一格。
+        return rect.contains(point) ? to : nil
+    }
+
+    private func canDropIntoFolder(_ to: Int, from: Int) -> Bool {
+        guard to != from, browseItems.indices.contains(to), browseItems.indices.contains(from),
+              case .folder(_, let target, _) = browseItems[to],
+              !config.isFolderHidden(at: target) else { return false }
+        if case .folder(_, let source, _) = browseItems[from],
+           !config.canMoveFolder(source, into: target) { return false }
+        return true
+    }
+
+    private func updateFolderDropReadiness() {
+        guard let hover = folderHover, folderDropTarget == nil,
+              ProcessInfo.processInfo.systemUptime - hover.since >= Self.folderDropDelay else { return }
+        folderDropTarget = hover.index
+    }
+
+    private func clearFolderDrop() {
+        folderHover = nil
+        folderDropTarget = nil
+    }
+
+    private func clearFolderInsertion() {
+        folderInsertion = nil
+        insertionSince = 0
+    }
+
+    private func applyFolderInsertion(force: Bool = false) {
+        guard let insertion = folderInsertion, let from = dragIndex,
+              force || ProcessInfo.processInfo.systemUptime - insertionSince >= Self.folderInsertionDelay else { return }
+        let to = insertion.index + (insertion.after ? 1 : 0) - (from < insertion.index ? 1 : 0)
+        guard to != from else { return }
+        clearFolderInsertion()
+        reorderDrag(from: from, to: to)
+    }
+
     /// 松手：落在网格里就移进当前空位并写回配置，落到网格外就取消，恢复原来的顺序
     func endDrag(location: CGPoint, inGrid: Bool) {
+        // 以松手位置复核目标，不能把上一次 hover 当作最终落点。
+        if inGrid, let i = dragIndex, let last = lastDrag {
+            drag(i, start: .zero, location: location, geo: last.geo)
+        }
+        let target = folderDropTarget
+        let quickTarget = folderHover?.index
         stopAutoScroll()
+        if inGrid { applyFolderInsertion(force: true) }
+        clearFolderInsertion()
+        guard let i = dragIndex else { return }
+        if inGrid, let target {
+            moveDraggedTile(i, into: target)
+            return
+        }
+        clearFolderDrop()
+        // 中央短暂停留后立即松手仍视为排序；固定区到目录的移动必须等高亮。
+        if inGrid, let quickTarget, tileGroups[i] == tileGroups[quickTarget] {
+            reorderDrag(from: i, to: quickTarget)
+        }
         guard let i = dragIndex else { return }
         let key = tileKey(i)
         if inGrid { commitOrder(group: tileGroups[i]) }
@@ -376,8 +554,36 @@ final class LauncherModel: ObservableObject {
             if !inGrid { browseItems = dragSnapshot }
             dragIndex = nil
         }
-        // 写配置会走 refilter，把选中项重置成屏幕左上角第一格；拖动结束应该停在刚放下（或弹回）的格子上
+        // 取消时也按身份找回原位；配置重建本身保持选中项，不再发布中间的首格高亮。
         selection = browseItems.indices.first { tileKey($0) == key } ?? selection
+        dragSnapshot = []
+    }
+
+    private func moveDraggedTile(_ source: Int, into destination: Int) {
+        guard case .folder(_, let target, _) = browseItems[destination] else { return }
+        let tile = browseItems[source]
+        clearFolderDrop()
+        clearFolderInsertion()
+        // 预览时的让位不写回；本次只提交目录移动，避免应用消失后残留下标。
+        browseItems = dragSnapshot
+        dragIndex = nil
+        dragSnapshot = []
+        var destinationPath = target
+        updateConfig { config in
+            switch tile {
+            case .app(let app): config.moveApp(app, into: target)
+            case .folder(_, let path, _):
+                destinationPath = config.moveFolder(path, into: target) ?? target
+            }
+        }
+        selection = browseItems.firstIndex {
+            if case .folder(_, let path, _) = $0 { return path == destinationPath }
+            return false
+        } ?? min(selection, max(browseItems.count - 1, 0))
+    }
+
+    func cancelDrag() {
+        endDrag(location: .zero, inGrid: false)
     }
 
     /// 拖到可视区域上下边缘附近时持续滚动，越靠边越快
@@ -398,23 +604,37 @@ final class LauncherModel: ObservableObject {
     }
 
     private func autoScrollTick() {
-        guard let i = dragIndex, let (location, geo) = lastDrag, viewportHeight > 0 else { return }
+        updateFolderDropReadiness()
+        applyFolderInsertion()
+        guard let i = dragIndex, let last = lastDrag,
+              let scroll = dragSurface?.enclosingScrollView else { return }
+        let clip = scroll.contentView
+        let before = clip.bounds.minY
+        let height = clip.bounds.height
+        guard height > 0 else { return }
+        // 手动滚轮和自动滚动都可能改变偏移。保存鼠标相对可视区的位置，
+        // 即使没有新的 DragGesture 事件，也能让图标留在鼠标下方。
+        let location = CGPoint(x: last.location.x, y: last.location.y + before - last.offset)
         // 网格坐标在内边距里面，换算成滚动内容的坐标
-        let y = location.y + Layout.padding - viewportOffset
+        let y = location.y + Layout.padding - before
         let zone: CGFloat = 40, maxStep: CGFloat = 14
-        let step: CGFloat
-        if y < zone { step = -maxStep * min((zone - y) / zone, 1) }
-        else if y > viewportHeight - zone { step = maxStep * min((y - viewportHeight + zone) / zone, 1) }
-        else { return }
-        let maxOffset = max(geo.height + Layout.padding * 2 - viewportHeight, 0)
-        let target = min(max(viewportOffset + step, 0), maxOffset)
-        let delta = target - viewportOffset
-        guard abs(delta) >= 0.5 else { return }
-        // 先按预期更新，不等滚动回调，避免下一帧还按旧偏移算
-        viewportOffset = target
-        autoScrollY = target
-        // 内容滚了 delta，鼠标没动，它在网格里的位置也就跟着变了 delta
-        drag(i, start: .zero, location: CGPoint(x: location.x, y: location.y + delta), geo: geo)
+        var step: CGFloat = 0
+        if location.x >= 0 && location.x <= Layout.width - Layout.padding * 2 {
+            if y < zone { step = -maxStep * min((zone - y) / zone, 1) }
+            else if y > height - zone { step = maxStep * min((y - height + zone) / zone, 1) }
+        }
+        let maxOffset = max(last.geo.height + Layout.padding * 2 - height, 0)
+        let target = min(max(before + step, 0), maxOffset)
+        if abs(target - before) >= 0.5 {
+            clip.scroll(to: CGPoint(x: clip.bounds.minX, y: target))
+            scroll.reflectScrolledClipView(clip)
+        }
+        let actual = clip.bounds.minY
+        viewportOffset = actual
+        viewportHeight = height
+        guard abs(actual - last.offset) >= 0.01 else { return }
+        drag(i, start: .zero,
+             location: CGPoint(x: location.x, y: location.y + actual - before), geo: last.geo)
     }
 
     /// 目录在 order 里的写法
@@ -423,8 +643,7 @@ final class LauncherModel: ObservableObject {
     /// 把某个分组当前的顺序写回配置：固定写 pinned，顶层写 order，目录里写目录的 order
     private func commitOrder(group: String) {
         let tiles = tileGroups.indices.filter { tileGroups[$0] == group }.map { browseItems[$0] }
-        let apps = tiles.compactMap { if case .app(let a) = $0 { a } else { nil } }
-        /// 按新顺序排出引用。已有的引用原样保留写法，匹配不到应用的（卸载了或隐藏了的）留在末尾
+        /// 按新顺序排出引用。已有引用保留写法，不可见项保留原来的槽位。
         func refs(_ old: [String]) -> [String] {
             let listed = tiles.map { t -> String in
                 switch t {
@@ -432,7 +651,12 @@ final class LauncherModel: ObservableObject {
                 case .folder(let name, _, _): return Self.folderRefPrefix + name
                 }
             }
-            return listed + old.filter { r in !r.hasPrefix(Self.folderRefPrefix) && !apps.contains { $0.matches(r) } }
+            // 不可见项保留原有槽位；恢复隐藏后仍回到原来的相对位置。
+            let visible = Set(listed)
+            var remaining = listed.makeIterator()
+            var merged = old.map { visible.contains($0) ? (remaining.next() ?? $0) : $0 }
+            while let ref = remaining.next() { merged.append(ref) }
+            return merged
         }
         let path = folderPath
         updateConfig { c in
@@ -538,9 +762,12 @@ final class LauncherModel: ObservableObject {
             addRows(title, group)
         }
         /// 目录和应用混排：order 里列出的按 order 排；没列出的目录按 folders 顺序排在前面，没列出的应用按给定顺序排在后面
-        func arrange(_ list: [FolderConfig], _ prefix: [Int], _ apps: [AppItem], _ order: [String]) -> [Tile] {
+        func arrange(_ list: [FolderConfig], _ prefix: [Int], _ apps: [AppItem], _ order: [String],
+                     includeHidden: Bool = false) -> [Tile] {
             var folders: [Tile?] = list.enumerated().map { i, f in
-                .folder(name: f.name, path: prefix + [i], icons: resolve(f.apps).prefix(4).map(\.icon))
+                guard includeHidden || !f.hidden else { return nil }
+                return .folder(name: f.name, path: prefix + [i],
+                               icons: resolve(f.apps, includeHidden: includeHidden).prefix(4).map(\.icon))
             }
             var rest: [AppItem?] = apps
             var out: [Tile] = []
@@ -564,35 +791,61 @@ final class LauncherModel: ObservableObject {
             items = []
             entries = []
             groups = []
-            add("固定", resolve(config.pinned).map(Tile.app))
+            let pinned = resolve(config.pinned).map(Tile.app)
             switch m {
             case .custom:
                 // 目录和没进任何目录的应用混排在同一组（固定的仍然出现在这里，固定只是快捷方式）。
                 // 按 order 排，没列出的（新装的）按名字排在后面
                 let filed = Set(config.allFolders().flatMap { resolve($0.folder.apps).map(\.id) })
                 let unfiled = shownApps.filter { !filed.contains($0.id) }
-                add("应用", arrange(config.folders, [], unfiled, config.order))
+                let main = arrange(config.folders, [], unfiled, config.order)
+                addRows("固定", pinned)
+                if !pinned.isEmpty && !main.isEmpty {
+                    entries.append(GridEntry(id: "divider", kind: .divider))
+                }
+                addRows("应用", main)
             case .sorted:
+                add("固定", pinned)
                 // 全部应用按首字母分组，不管在不在目录里
                 let byLetter = Dictionary(grouping: shownApps, by: \.section)
                 for letter in byLetter.keys.sorted(by: { ($0 == "#" ? "~" : $0) < ($1 == "#" ? "~" : $1) }) {
                     add(letter, byLetter[letter]!.map(Tile.app))
                 }
             }
-            let rows = entries.filter { !$0.indices.isEmpty }.count
-            return Layout.gridHeight(headers: entries.count - rows, rows: rows)
+            return Layout.searchHeight + 1 + min(entries.reduce(Layout.padding * 2) { $0 + $1.height },
+                                                 Layout.maxGridHeight)
         }
 
         // 面板高度取两种模式顶层里高的那个：切模式、进目录时面板都不跟着变高变矮
         let otherHeight = buildTop(mode.other)
         browseHeight = max(buildTop(mode), otherHeight)
 
+        if showingHidden {
+            // 隐藏区保持可视高度，空目录也有明确的返回入口和空态。
+            browseHeight = Layout.searchHeight + 1 + Layout.maxGridHeight
+            items = []
+            groups = []
+            entries = [GridEntry(id: "b:hidden", kind: .back("隐藏区"))]
+            let roots = config.hiddenFolderRoots
+            let folders: [Tile] = roots.map {
+                .folder(name: $0.folder.name, path: $0.path,
+                        icons: resolve($0.folder.apps, includeHidden: true).prefix(4).map(\.icon))
+            }
+            // 已属于隐藏目录的应用在目录内查看，避免隐藏区顶层重复列出。
+            let filed = config.hiddenFolderAppRefs
+            let looseApps = resolve(config.hidden, includeHidden: true).filter { app in
+                !filed.contains(where: app.matches)
+            }
+            addRows("隐藏", folders + looseApps.map(Tile.app))
+        }
+
         if inFolder, let folder = config.folder(at: folderPath) {
             // 目录内：返回条 + 子目录和应用混排，按目录的 order，没列出的子目录在前、应用按 apps 顺序
             items = []
             groups = []
             entries = [GridEntry(id: "b:\(levelKey)", kind: .back(folder.name))]
-            addRows("f\(levelKey)", arrange(folder.folders, folderPath, resolve(folder.apps), folder.order))
+            addRows("f\(levelKey)", arrange(folder.folders, folderPath,
+                resolve(folder.apps, includeHidden: showingHidden), folder.order, includeHidden: showingHidden))
         }
 
         browseItems = items
@@ -600,13 +853,14 @@ final class LauncherModel: ObservableObject {
         self.entries = entries
     }
 
-    private func refilter() {
+    private func refilter(resetSelection: Bool = true) {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.isEmpty {
             results = []
         } else {
             // 只按匹配程度排序，不掺使用频率，同一个查询结果顺序始终一致
-            let scored: [(app: AppItem, score: Int)] = shownApps.compactMap { app in
+            let source = showingHidden ? apps.filter { config.isHidden($0) } : shownApps
+            let scored: [(app: AppItem, score: Int)] = source.compactMap { app in
                 guard let s = score(app, q) else { return nil }
                 return (app, s)
             }
@@ -615,7 +869,7 @@ final class LauncherModel: ObservableObject {
             }
             results = sorted.prefix(Self.maxResults).map(\.app)
         }
-        selection = q.isEmpty ? firstVisibleIndex() : 0
+        if resetSelection { selection = q.isEmpty ? firstVisibleIndex() : 0 }
         if !q.isEmpty { showingIndex = false }
     }
 

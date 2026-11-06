@@ -5,7 +5,7 @@ description: Install, update, and organize MenuLauncher, a macOS menu bar app la
 
 # MenuLauncher
 
-MenuLauncher is a menu bar dropdown launcher for macOS 15+ (⌥Space by default, configurable, or click the menu bar icon). The app does not sort by usage. Apps stay in fixed positions so the user can rely on spatial memory: a 固定 (pinned) section at the top, then one of two modes the user switches with a toggle or Tab. 定制 (custom) mode shows 应用: folder tiles and apps not in any folder, mixed in one order. The user can drag tiles to reorder them within a section. 顺序 (sorted) mode shows every app A–Z by name or pinyin, ignoring folders. All organization lives in a JSON config file that you edit. The app reloads it automatically.
+MenuLauncher is a menu bar dropdown launcher for macOS 15+ (⌥Space by default, configurable, or click the menu bar icon). Apps stay in fixed positions without usage-based sorting. 定制 (custom) mode shows pinned apps and a mixed grid of folders and unfiled apps, separated by a line, without titles or an index. Tiles can be dragged within their section. 顺序 (sorted) mode shows visible apps A–Z by name or pinyin and supports a section index. The toggle or Tab switches modes. The eye-slash button beside search opens the hidden area. All organization lives in a JSON config file that the app reloads automatically.
 
 ## Install and update
 
@@ -83,8 +83,9 @@ If the user doesn't want recording, set `"recordUsage": false` in the config. To
 - Every key is optional.
 - An app reference can be a bundle id (preferred, because it survives the app moving), an absolute path starting with `/` or `~`, or the exact displayed name. Matching is case-insensitive.
 - `pinned`: shown in order at the top. Pinning is a shortcut, so a pinned app still appears in its folder or letter group.
-- `hidden`: removed from the grid and from search.
-- `folders`: shown as folder tiles in 定制 mode. They can nest to any depth through `folders`. In 定制 mode an app that is in any folder no longer appears in 应用; 顺序 mode and search still show it. One app should be in at most one folder.
+- Top-level `hidden`: app references excluded from ordinary browsing and search. They remain accessible in the hidden area, which also has its own app search. Remove a reference to restore the app.
+- `folders`: shown as folder tiles in 定制 mode. They can nest through `folders`. Filed apps are excluded from the unfiled grid; ordinary sorted mode and search still show them unless hidden. One app should be in at most one folder.
+- Folder-level `hidden`: boolean, default `false`. Set `"hidden": true` on the exact folder object to hide it, its descendants, and their apps from normal browsing, pinned shortcuts, and search. The hidden area keeps the subtree navigable. Set it to `false` or remove it to restore the folder; descendants with their own `hidden: true` and apps in top-level `hidden` remain hidden. Keep `apps`, `folders`, `pinned`, and `order` unchanged when hiding/restoring. `--list-apps` reports `hidden: true` for apps hidden through a folder too.
 - Folder names must be non-empty and unique among siblings.
 - `order`: the mixed order of folders and unfiled apps in the 应用 section in 定制 mode. Apps are written as references, folders as `"folder:<name>"`. Unlisted folders come first in `folders` order, unlisted apps come last by name. A folder can have its own `order` with the same format for its subfolders and apps (unlisted subfolders first, then apps in `apps` order). Dragging writes `pinned`, top-level `order`, and folder `order`. If you rename a folder, update its `folder:` entries too.
 - `recordUsage`: set to `false` to stop writing `usage.jsonl`. Defaults to `true`.
@@ -103,4 +104,5 @@ If the user doesn't want recording, set `"recordUsage": false` in the config. To
 
 - If the user asks to tidy up, propose a grouping (for example 开发 / 设计 / 办公 / 系统工具) and confirm it before writing, unless they told you to just do it.
 - Never reorder existing entries on your own initiative.
-- The user can also pin, hide, and remove apps from a folder through the right-click menu. Those changes are written back to the same file, so always re-read it before editing.
+- The user can pin/hide apps, hide whole folders, and restore items through right-click menus. Hidden folders appear at the hidden area's root unless an ancestor is already hidden; Back/Esc/blank-area clicks return one level. Closing the panel exits the hidden area. These changes are written to the same config, so re-read it before editing.
+- In custom mode, folder centers accept a drop after about 0.4 seconds and show **移入目录**. Edges show an insertion line for sorting: hold about 0.18 seconds for a preview or release to insert immediately. Brief edge crossings do not push folders away. Apps moved inside leave their previous folder but keep pinned shortcuts; folders keep their subtrees. The destination appends the item after existing contents. Self/descendant moves and duplicate child folder names are rejected. Re-read config after a drag because it updates membership and `order` together.

@@ -11,6 +11,7 @@ enum Layout {
     static let cellHeight: CGFloat = 88
     /// 上方 8 + 胶囊 22 + 下方 8 的间隙
     static let headerHeight: CGFloat = 38
+    static let dividerHeight: CGFloat = 13
     static let maxGridHeight: CGFloat = 520
 
     static let errorHeight: CGFloat = 32
@@ -33,13 +34,21 @@ struct LauncherView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索应用", text: $model.query)
+                TextField(model.showingHidden ? "搜索隐藏应用" : "搜索应用", text: $model.query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .focused($focused)
                 if model.isBrowsing {
                     ModeSwitch(mode: model.mode) { model.setMode($0) }
                 }
+                Button { model.setShowingHidden(!model.showingHidden) } label: {
+                    Image(systemName: model.showingHidden ? "eye.slash.fill" : "eye.slash")
+                        .foregroundStyle(model.showingHidden ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help(model.showingHidden ? "退出隐藏区" : "进入隐藏区")
+                .accessibilityLabel(model.showingHidden ? "退出隐藏区" : "进入隐藏区")
             }
             .padding(.horizontal, 12)
             .frame(height: Layout.searchHeight)
@@ -73,6 +82,7 @@ struct LauncherView: View {
         return ScrollViewReader { proxy in
           // 外面套一层 ZStack，换层时新旧两个滚动视图能同时存在，做交叉过渡
           ZStack {
+           GeometryReader { viewport in
             ScrollView {
               VStack(spacing: 0) {
                 // 内容最顶端（含上边距）的锚点，恢复到第一项时滚到这里，不会把上边距滚出去
@@ -86,7 +96,12 @@ struct LauncherView: View {
                         ForEach(model.entries) { entry in
                             switch entry.kind {
                             case .header(let title):
-                                SectionHeader(title: title) { model.showingIndex = true }.id(entry.id)
+                                SectionHeader(title: title) {
+                                    if model.canShowIndex { model.showingIndex = true }
+                                }.id(entry.id)
+                            case .divider:
+                                Divider().padding(.horizontal, 4)
+                                    .frame(height: Layout.dividerHeight).id(entry.id)
                             case .back(let name):
                                 BackBar(name: name) { model.leaveFolder() }.id(entry.id)
                             case .row:
@@ -101,16 +116,26 @@ struct LauncherView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .coordinateSpace(.named(Self.gridSpace))
                 .scrollTargetLayout()
+                .background { DragScrollSurface(model: model, level: level) }
                 .padding(Layout.padding)
               }
-              // 格子之间的空隙在滚动内容里，外面的点击层收不到，内容这一层也要接一下
-              .background { backgroundTap }
-              // 拖动自动滚动的锚点，放在内容的 autoScrollY 处，滚到它就是滚到这个偏移。
-              // 用 alignmentGuide 而不是 offset：offset 不改布局位置，scrollTo 找不到
+              // 短目录也覆盖整个可视区，否则下方点击会被 NSScrollView 吃掉，
+              // 放在滚动视图背后的 background 手势收不到这些事件。
+              .frame(minHeight: viewport.size.height, alignment: .top)
               .overlay(alignment: .top) {
-                  Color.clear.frame(width: 1, height: 1)
-                      .alignmentGuide(.top) { _ in -model.autoScrollY }
-                      .id(Self.autoScrollAnchor)
+                  if model.showingHidden && model.browseItems.isEmpty {
+                      Text(model.inFolder ? "此目录为空" : "没有隐藏的应用或目录")
+                          .font(.system(size: 13)).foregroundStyle(.secondary)
+                          .padding(.top, Layout.headerHeight + 40)
+                          .allowsHitTesting(false)
+                  }
+              }
+              .contentShape(Rectangle())
+              .onTapGesture {
+                  // 子项的导航已切换层级时不再返回，避免一次点击进目录又退出。
+                  if level == model.levelKey && model.canGoBack && model.dragIndex == nil {
+                      model.leaveFolder()
+                  }
               }
             }
             .scrollIndicators(.never)
@@ -118,12 +143,11 @@ struct LauncherView: View {
             // 搜索框失焦再聚焦，光标闪烁重新计时，看起来像突然快闪了一下
             .focusable(false)
             .focusEffectDisabled()
-            // 目录里点空白处（格子之间、网格下方）回到上一级。格子自己的点击优先，不会触发这里
-            .background { backgroundTap }
             // 只读地记录像素偏移。滚动只通过 proxy.scrollTo 主动触发，不绑定 scrollPosition：
             // 绑定的值不会随手动滚动/跳转更新，视图一刷新（比如 hover 改选中项）就会把列表拉回那个旧位置
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in
-                if level == model.levelKey && model.isBrowsing && !model.showingIndex && !model.inFolder {
+                if level == model.levelKey && model.isBrowsing && !model.showingIndex &&
+                    !model.inFolder && !model.showingHidden {
                     model.scrollOffset = max(y, 0)
                 }
             }
@@ -132,14 +156,8 @@ struct LauncherView: View {
                 model.viewportOffset = r.minY
                 model.viewportHeight = r.height
             }
-            .onChange(of: model.autoScrollY) {
-                guard model.dragIndex != nil else { return }
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) { proxy.scrollTo(Self.autoScrollAnchor, anchor: .top) }
-            }
             // 滚动视图常驻，隐藏再打开时位置本来就还在，只在网格重新出现（启动、从搜索切回、退出目录）时恢复
-            .onAppear { if !model.inFolder { restoreScroll(proxy) } }
+            .onAppear { if !model.inFolder && !model.showingHidden { restoreScroll(proxy) } }
             .onChange(of: model.scrollRequest) {
                 guard let r = model.scrollRequest else { return }
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(r.rowID, anchor: r.anchor) }
@@ -151,15 +169,16 @@ struct LauncherView: View {
                             available: Set(model.sectionTitles),
                             onPick: { model.jump(to: $0) },
                             onDismiss: { model.showingIndex = false })
-                    .opacity(model.showingIndex ? 1 : 0)
+                    .opacity(model.showingIndex && model.canShowIndex ? 1 : 0)
                     .scaleEffect(model.showingIndex ? 1 : 0.97)
-                    .allowsHitTesting(model.showingIndex)
+                    .allowsHitTesting(model.showingIndex && model.canShowIndex)
             }
             .animation(.easeOut(duration: 0.15), value: model.showingIndex)
             // 每一层目录、每种模式各用一个滚动视图：进目录从顶部开始，退回顶层时重新出现，按保存的偏移恢复。
             // 换层时新旧两层交叉淡入淡出
             .id(model.levelKey)
             .transition(levelTransition)
+           }
           }
         }
         .animation(.easeOut(duration: 0.18), value: model.levelKey)
@@ -172,14 +191,6 @@ struct LauncherView: View {
     }
 
     private static let topAnchor = "top"
-    private static let autoScrollAnchor = "autoScroll"
-
-    /// 目录里点空白处回到上一级
-    private var backgroundTap: some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture { if model.inFolder && model.dragIndex == nil { model.leaveFolder() } }
-    }
 
     private func restoreScroll(_ proxy: ScrollViewProxy) {
         guard let id = model.entryIDForSavedOffset() else { return }
@@ -210,7 +221,25 @@ struct LauncherView: View {
             .onTapGesture { model.launch(at: i) }
             .contextMenu {
                 if case .app(let app) = tile { menu(for: app) }
-                else { Button("编辑配置文件…") { model.openConfig() } }
+                else if case .folder(_, let path, _) = tile {
+                    if model.config.folder(at: path)?.hidden == true {
+                        Button("取消隐藏目录") { model.setFolderHidden(path, false) }
+                    } else if !model.showingHidden {
+                        Button("隐藏目录") { model.setFolderHidden(path, true) }
+                    }
+                    Button("编辑配置文件…") { model.openConfig() }
+                }
+            }
+            .overlay {
+                if let insertion = model.folderInsertion, insertion.index == i {
+                    HStack {
+                        if insertion.after { Spacer(minLength: 0) }
+                        Capsule().fill(Color.accentColor).frame(width: 3)
+                        if !insertion.after { Spacer(minLength: 0) }
+                    }
+                    .padding(.vertical, 6)
+                    .allowsHitTesting(false)
+                }
             }
             .modifier(Reorderable(model: model, index: i, geo: geo, space: Self.gridSpace))
     }
@@ -239,9 +268,35 @@ struct LauncherView: View {
         if model.inFolder && model.isBrowsing {
             Button("移出目录") { model.removeFromFolder(app) }
         }
-        Button("隐藏") { model.hide(app) }
+        if model.config.hidden.contains(where: app.matches) {
+            Button("取消隐藏") { model.unhide(app) }
+        } else if model.showingHidden {
+            Text("随所在目录隐藏")
+        } else {
+            Button("隐藏") { model.hide(app) }
+        }
         Divider()
         Button("在 Finder 中显示") { model.revealInFinder(app) }
+    }
+}
+
+/// 放在滚动内容内，只用于取得它实际所属的 NSScrollView，不参与点击和焦点。
+private struct DragScrollSurface: NSViewRepresentable {
+    let model: LauncherModel
+    let level: String
+
+    final class Surface: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> Surface {
+        let view = Surface()
+        if level == model.levelKey { model.dragSurface = view }
+        return view
+    }
+
+    func updateNSView(_ view: Surface, context: Context) {
+        if level == model.levelKey { model.dragSurface = view }
     }
 }
 
@@ -320,6 +375,18 @@ private struct Reorderable: ViewModifier {
         let dragging = model.dragIndex == index
         let o = dragging ? model.dragOrigin : geo.origins[index]
         let placed = content
+            .overlay {
+                if model.folderDropTarget == index {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.accentColor, lineWidth: 2)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.15)))
+                        .overlay(alignment: .bottom) {
+                            Text("移入目录").font(.system(size: 10, weight: .medium))
+                                .padding(.horizontal, 4).background(.regularMaterial, in: Capsule())
+                        }
+                        .allowsHitTesting(false)
+                }
+            }
             .scaleEffect(dragging ? 1.08 : 1)
             .shadow(color: .black.opacity(dragging ? 0.25 : 0), radius: 8, y: 3)
             .offset(x: o.x, y: o.y)
@@ -348,7 +415,7 @@ struct GridGeometry {
         var y: CGFloat = 0
         for e in entries {
             let r = e.indices
-            if r.isEmpty { y += Layout.headerHeight; continue }
+            if r.isEmpty { y += e.height; continue }
             for (c, i) in r.enumerated() where i < count {
                 origins[i] = CGPoint(x: CGFloat(c) * Layout.cellWidth, y: y)
             }
@@ -505,9 +572,10 @@ private struct GridCell: View, Equatable {
         )
         // 高亮淡入淡出，hover 扫过时不会一格格硬闪
         .animation(.easeOut(duration: 0.1), value: selected)
+        // 命中范围跟随高亮区域，外层用于对齐的留白属于目录背景。
+        .contentShape(Rectangle())
         .padding(.top, 2)
         .frame(width: Layout.cellWidth, height: Layout.cellHeight, alignment: .top)
-        .contentShape(Rectangle())
         .help(name)
     }
 }

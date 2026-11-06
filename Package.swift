@@ -6,6 +6,8 @@ let package = Package(
     platforms: [.macOS(.v15)],
     targets: [
         .executableTarget(name: "MenuLauncher", path: "Sources/MenuLauncher",
-                          swiftSettings: [.swiftLanguageMode(.v5)])
+                          swiftSettings: [.swiftLanguageMode(.v5)]),
+        .testTarget(name: "MenuLauncherTests", dependencies: ["MenuLauncher"],
+                    swiftSettings: [.swiftLanguageMode(.v5)])
     ]
 )

@@ -70,6 +70,90 @@ struct LauncherConfig: Codable, Equatable {
         walk(folders, [])
         return out
     }
+
+    /// 隐藏区只列出最外层的隐藏目录，子目录保留在它们内部。
+    var hiddenFolderRoots: [(path: [Int], folder: FolderConfig)] {
+        var out: [(path: [Int], folder: FolderConfig)] = []
+        func walk(_ list: [FolderConfig], _ prefix: [Int]) {
+            for (i, folder) in list.enumerated() {
+                let path = prefix + [i]
+                if folder.hidden { out.append((path, folder)) }
+                else { walk(folder.folders, path) }
+            }
+        }
+        walk(folders, [])
+        return out
+    }
+
+    var hiddenFolderAppRefs: [String] {
+        func refs(_ folder: FolderConfig) -> [String] {
+            folder.apps + folder.folders.flatMap(refs)
+        }
+        return hiddenFolderRoots.flatMap { refs($0.folder) }
+    }
+
+    func isHidden(_ app: AppItem) -> Bool {
+        hidden.contains(where: app.matches) || hiddenFolderAppRefs.contains(where: app.matches)
+    }
+
+    func isFolderHidden(at path: [Int]) -> Bool {
+        path.indices.contains { folder(at: Array(path[...$0]))?.hidden == true }
+    }
+
+    /// 移入目录保留固定快捷方式；清理原目录及混排顺序中的所有等价引用。
+    @discardableResult
+    mutating func moveApp(_ app: AppItem, into target: [Int]) -> Bool {
+        guard folder(at: target) != nil, !isFolderHidden(at: target) else { return false }
+        func remove(_ list: inout [FolderConfig]) {
+            for i in list.indices {
+                list[i].apps.removeAll(where: app.matches)
+                list[i].order.removeAll { !$0.hasPrefix("folder:") && app.matches($0) }
+                remove(&list[i].folders)
+            }
+        }
+        remove(&folders)
+        order.removeAll { !$0.hasPrefix("folder:") && app.matches($0) }
+        editFolder(at: target) {
+            $0.order = $0.expandedOrder
+            $0.apps.append(app.configRef)
+            $0.order.append(app.configRef)
+        }
+        return true
+    }
+
+    func canMoveFolder(_ source: [Int], into target: [Int]) -> Bool {
+        guard let item = folder(at: source), let destination = folder(at: target),
+              !target.starts(with: source), !isFolderHidden(at: target),
+              !destination.folders.contains(where: { $0.name == item.name }) else { return false }
+        return true
+    }
+
+    /// 返回移走源目录后，目标目录的新路径。先插入再删除，避免提前改变目标下标。
+    mutating func moveFolder(_ source: [Int], into target: [Int]) -> [Int]? {
+        guard canMoveFolder(source, into: target), let item = folder(at: source),
+              let sourceIndex = source.last else { return nil }
+        editFolder(at: target) {
+            $0.order = $0.expandedOrder
+            $0.folders.append(item)
+            $0.order.append("folder:" + item.name)
+        }
+        let parent = Array(source.dropLast())
+        if parent.isEmpty {
+            folders.remove(at: sourceIndex)
+            order.removeAll { $0 == "folder:" + item.name }
+        } else {
+            editFolder(at: parent) {
+                $0.folders.remove(at: sourceIndex)
+                $0.order.removeAll { $0 == "folder:" + item.name }
+            }
+        }
+        var adjusted = target
+        if target.starts(with: parent), target.count > parent.count,
+           target[parent.count] > sourceIndex {
+            adjusted[parent.count] -= 1
+        }
+        return adjusted
+    }
 }
 
 struct FolderConfig: Codable, Equatable {
@@ -78,8 +162,16 @@ struct FolderConfig: Codable, Equatable {
     var folders: [FolderConfig] = []
     /// 目录内子目录和应用混排的顺序，含义同 LauncherConfig.order
     var order: [String] = []
+    /// 隐藏整个目录及其后代；保留原位置和引用。
+    var hidden = false
 
-    private enum CodingKeys: String, CodingKey { case name, apps, folders, order }
+    /// 在末尾追加项之前把隐式顺序展开，避免新项挤到原有未列出项的前面。
+    var expandedOrder: [String] {
+        let folderRefs = folders.map { "folder:" + $0.name }
+        return folderRefs.filter { !order.contains($0) } + order + apps.filter { !order.contains($0) }
+    }
+
+    private enum CodingKeys: String, CodingKey { case name, apps, folders, order, hidden }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -87,6 +179,7 @@ struct FolderConfig: Codable, Equatable {
         apps = try c.decodeIfPresent([String].self, forKey: .apps) ?? []
         folders = try c.decodeIfPresent([FolderConfig].self, forKey: .folders) ?? []
         order = try c.decodeIfPresent([String].self, forKey: .order) ?? []
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
     }
 
     /// 空的 folders / order 不写出来，保持配置文件简洁
@@ -96,6 +189,7 @@ struct FolderConfig: Codable, Equatable {
         try c.encode(apps, forKey: .apps)
         if !folders.isEmpty { try c.encode(folders, forKey: .folders) }
         if !order.isEmpty { try c.encode(order, forKey: .order) }
+        if hidden { try c.encode(true, forKey: .hidden) }
     }
 }
 

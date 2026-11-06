@@ -42,7 +42,7 @@ enum CLI {
             var row: [String: Any] = ["name": app.name, "path": app.url.path]
             if let id = app.bundleID { row["bundleId"] = id }
             if config.pinned.contains(where: app.matches) { row["pinned"] = true }
-            if config.hidden.contains(where: app.matches) { row["hidden"] = true }
+            if config.isHidden(app) { row["hidden"] = true }
             if let f = folders.first(where: { $0.folder.apps.contains(where: app.matches) }) {
                 row["folder"] = f.names.joined(separator: "/")
             }

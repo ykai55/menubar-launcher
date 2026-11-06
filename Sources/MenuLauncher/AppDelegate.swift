@@ -299,9 +299,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Tab 在目录 / 音序模式之间切换
             case kVK_Tab where self.model.isBrowsing: self.model.setMode(self.model.mode.other); return nil
             case kVK_Escape where self.model.showingIndex: self.model.showingIndex = false; return nil
-            case kVK_Escape where self.model.isBrowsing && self.model.inFolder: self.model.leaveFolder(); return nil
+            case kVK_Escape where self.model.isBrowsing && self.model.canGoBack: self.model.leaveFolder(); return nil
             // 搜索框为空时 ⌫ 返回上一级目录
-            case kVK_Delete where self.model.isBrowsing && self.model.inFolder: self.model.leaveFolder(); return nil
+            case kVK_Delete where self.model.isBrowsing && self.model.canGoBack: self.model.leaveFolder(); return nil
             // 有搜索内容时 Esc 先清空，再按一次才收起面板
             case kVK_Escape where !self.model.isBrowsing: self.model.query = ""; return nil
             case kVK_Escape: self.hide(); return nil
