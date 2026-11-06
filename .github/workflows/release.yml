@@ -65,7 +65,8 @@ jobs:
           ./make-dmg.sh
           ditto -c -k --keepParent build/MenuLauncher.app build/MenuLauncher.zip
           ditto -c -k --keepParent skills/menulauncher build/menulauncher-skill.zip
-          lipo -verify_arch arm64 x86_64 build/MenuLauncher.app/Contents/MacOS/MenuLauncher
+          ARCHS="$(lipo -archs build/MenuLauncher.app/Contents/MacOS/MenuLauncher)"
+          [[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]]
           codesign --verify --strict build/MenuLauncher.app
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/MenuLauncher.app/Contents/Info.plist)" = "$VERSION"
           build/MenuLauncher.app/Contents/MacOS/MenuLauncher --config-path
