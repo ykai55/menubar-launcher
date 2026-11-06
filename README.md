@@ -90,5 +90,22 @@ npx skills add ykai55/menubar-launcher
 ```sh
 ./build-app.sh       # build/MenuLauncher.app (host arch)
 ./make-dmg.sh        # universal build/MenuLauncher.dmg
-./make-release.sh X.Y.Z   # tag, GitHub release, bump Homebrew cask
+./make-release.sh X.Y.Z   # optionally set a version floor and push main
 ```
+
+## Continuous deployment
+
+Every push to `main` runs the tests, builds universal DMG/ZIP packages and
+`menulauncher-skill.zip`, publishes a GitHub Release, and updates the Homebrew cask.
+Pushes are serialized; queued commits superseded by a newer main commit are skipped.
+The workflow can also be started manually from Actions on main.
+
+The release version is the greater of `VERSION` and the highest existing release
+tag's next patch version. The workflow tags the exact source commit without
+writing back to main. To start a new minor or major version, change `VERSION`
+before pushing, or run `./make-release.sh X.Y.Z`.
+
+Re-running a failed workflow reuses its tag. An already published release keeps
+its original archives; the workflow downloads its ZIP to retry the Homebrew update.
+The tap requires the repository secret `TAP_DEPLOY_KEY` with write access to
+`ykai55/homebrew-tap`.

@@ -1,42 +1,84 @@
-# 推送 vX.Y.Z tag 时自动发版：打通用二进制 DMG/zip → 建 GitHub Release → 更新 Homebrew tap 里的 cask。
-# 本地只需要 ./make-release.sh X.Y.Z（写 VERSION、提交、打 tag、推送）
+# main 持续发布：测试 → 通用安装包和 skill → Release → Homebrew。
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-      - name: Check version
+      - name: Skip superseded commits
+        id: current
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$(cat VERSION)" != "$VERSION" ]; then
-            echo "::error::VERSION 文件是 $(cat VERSION)，和 tag $GITHUB_REF_NAME 不一致"
-            exit 1
+          HEAD_SHA=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$HEAD_SHA" = "$GITHUB_SHA" ]; then
+            echo "active=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main 已有更新提交，跳过本次发布。" >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Select release version
+        if: steps.current.outputs.active == 'true'
+        id: version
+        run: python3 .github/release-version.py
+
+      - name: Check existing release
+        if: steps.current.outputs.active == 'true'
+        id: release
+        run: |
+          gh release list --limit 1000 --json tagName,isDraft > "$RUNNER_TEMP/releases.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          releases = json.loads((Path(os.environ["RUNNER_TEMP"]) / "releases.json").read_text())
+          published = any(r["tagName"] == os.environ["TAG"] and not r["isDraft"] for r in releases)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"published={str(published).lower()}\n")
+          PY
+
+      - name: Test
+        if: steps.current.outputs.active == 'true' && steps.release.outputs.published != 'true'
+        run: swift test --build-system native
 
       - name: Build
+        if: steps.current.outputs.active == 'true' && steps.release.outputs.published != 'true'
         run: |
           swift --version
           ./make-dmg.sh
           ditto -c -k --keepParent build/MenuLauncher.app build/MenuLauncher.zip
-          lipo -archs build/MenuLauncher.app/Contents/MacOS/MenuLauncher
+          ditto -c -k --keepParent skills/menulauncher build/menulauncher-skill.zip
+          lipo -verify_arch arm64 x86_64 build/MenuLauncher.app/Contents/MacOS/MenuLauncher
+          codesign --verify --strict build/MenuLauncher.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/MenuLauncher.app/Contents/Info.plist)" = "$VERSION"
           build/MenuLauncher.app/Contents/MacOS/MenuLauncher --config-path
 
       - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: steps.current.outputs.active == 'true' && steps.release.outputs.published != 'true'
         run: |
-          cat > notes.md <<'EOF'
+          # 先固定 tag 到本次源码。失败重跑复用 tag，公开前允许补齐草稿附件。
+          if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+          cat > "$RUNNER_TEMP/notes.md" <<'EOF'
           ## 安装
 
           ```sh
@@ -52,24 +94,45 @@ jobs:
           ```
 
           需要 macOS 15 或更高版本，同时支持 Apple 芯片和 Intel。
+
+          ## Agent skill
+
+          `npx skills add ykai55/menubar-launcher`
+
+          也可以下载 menulauncher-skill.zip，内含本版本的 SKILL.md。
           EOF
-          gh release create "$GITHUB_REF_NAME" build/MenuLauncher.dmg build/MenuLauncher.zip \
-            --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes
+          if ! gh release view "$TAG" --json isDraft > /dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft \
+              --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+          fi
+          gh release upload "$TAG" build/MenuLauncher.dmg build/MenuLauncher.zip \
+            build/menulauncher-skill.zip --clobber
+          gh release edit "$TAG" --draft=false --latest
+
+      - name: Reuse published archive on retry
+        if: steps.current.outputs.active == 'true' && steps.release.outputs.published == 'true'
+        run: gh release download "$TAG" --pattern MenuLauncher.zip --dir build
 
       # tap 是另一个仓库，默认的 GITHUB_TOKEN 写不进去，用只对 tap 有写权限的 deploy key
       - name: Update Homebrew cask
+        if: steps.current.outputs.active == 'true'
         env:
           TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          echo "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key
-          chmod 600 ~/.ssh/tap_key
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o StrictHostKeyChecking=accept-new"
+          KEY="$RUNNER_TEMP/tap_key"
+          trap 'rm -f "$KEY"' EXIT
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEY"
+          chmod 600 "$KEY"
+          export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           SHA=$(shasum -a 256 build/MenuLauncher.zip | cut -d' ' -f1)
-          git clone --depth 1 git@github.com:ykai55/homebrew-tap.git tap
-          sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" tap/Casks/menulauncher.rb
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "menulauncher $VERSION"
-          git push
+          TAP="$RUNNER_TEMP/tap"
+          git clone --depth 1 git@github.com:ykai55/homebrew-tap.git "$TAP"
+          sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" "$TAP/Casks/menulauncher.rb"
+          if ! git -C "$TAP" diff --quiet; then
+            git -C "$TAP" add Casks/menulauncher.rb
+            git -C "$TAP" -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "menulauncher $VERSION"
+            git -C "$TAP" push
+          fi
+          echo "已发布 [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)，并更新 Homebrew。" >> "$GITHUB_STEP_SUMMARY"
