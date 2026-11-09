@@ -39,7 +39,7 @@ final class DragTests: XCTestCase {
         model.drag(8, start: start, location: end, geo: geo)
         let key = model.tileKey(model.dragIndex!)
         var selections: [Int] = []
-        let observation = model.$selection.dropFirst().sink { selections.append($0) }
+        let observation = model.selectionState.$index.dropFirst().sink { selections.append($0) }
         model.endDrag(location: end, inGrid: true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertFalse(selections.contains(0), "Drop briefly selected first cell: \(selections)")

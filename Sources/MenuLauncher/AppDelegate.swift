@@ -18,6 +18,7 @@ final class DropdownPanel: NSPanel {
         isOpaque = false
         hasShadow = true
         hidesOnDeactivate = false
+        acceptsMouseMovedEvents = true
 
         let effect = NSVisualEffectView()
         effect.material = .menu
@@ -331,8 +332,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [
+            .keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel
+        ]) { [weak self] event in
             guard let self, event.window === self.panel else { return event }
+            if event.type != .keyDown {
+                self.model.selectionState.usePointer()
+                return event
+            }
             // 应用没有菜单栏，"编辑"菜单里的 ⌘A / ⌘C / ⌘V / ⌘X / ⌘Z 不会生效，这里手动转给输入框
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             if flags == .command && event.charactersIgnoringModifiers == "," {
@@ -351,6 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 if let action, NSApp.sendAction(action, to: nil, from: self) { return nil }
             }
+            self.model.selectionState.useKeyboard()
             switch Int(event.keyCode) {
             case kVK_DownArrow: self.model.move(.down); return nil
             case kVK_UpArrow: self.model.move(.up); return nil

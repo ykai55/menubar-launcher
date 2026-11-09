@@ -211,20 +211,11 @@ struct LauncherView: View {
         }
     }
 
-    /// 滚轮滚动时，格子从静止的光标下滑过也会触发 hover，这时忽略。
-    /// 否则每滚过一格都改 selection，整个面板跟着重算，滚动就卡
-    private func hoverSelect(_ i: Int) {
-        guard NSApp.currentEvent?.type != .scrollWheel, model.selection != i else { return }
-        model.selection = i
-    }
-
     private static let gridSpace = "grid"
 
     private func cell(_ i: Int, geo: GridGeometry) -> some View {
         let tile = model.browseItems[i]
-        return GridCell(tile: tile, selected: i == model.selection)
-            .equatable()
-            .onHover { if $0 && model.dragIndex == nil { hoverSelect(i) } }
+        return SelectedGridCell(tile: tile, index: i, selection: model.selectionState)
             .onTapGesture { model.launch(at: i) }
             .contextMenu {
                 if case .app(let app) = tile { menu(for: app) }
@@ -260,8 +251,7 @@ struct LauncherView: View {
                     .frame(maxWidth: .infinity, minHeight: Layout.rowHeight)
             }
             ForEach(Array(model.results.enumerated()), id: \.element.id) { i, app in
-                Row(app: app, selected: i == model.selection)
-                    .onHover { if $0 { hoverSelect(i) } }
+                SelectedRow(app: app, index: i, selection: model.selectionState)
                     .onTapGesture { model.launch(at: i) }
                     .contextMenu { menu(for: app) }
             }
@@ -541,6 +531,28 @@ private struct LetterIndex: View {
     }
 }
 
+/// Observe selection inside the tile, below its layout and drag modifiers.
+/// The equality boundary keeps unchanged icons and labels out of the update.
+private struct SelectedGridCell: View {
+    let tile: Tile
+    let index: Int
+    @ObservedObject var selection: LauncherSelection
+
+    var body: some View {
+        GridCell(tile: tile, selected: selection.outlines(index)).equatable()
+    }
+}
+
+private struct SelectedRow: View {
+    let app: AppItem
+    let index: Int
+    @ObservedObject var selection: LauncherSelection
+
+    var body: some View {
+        Row(app: app, selected: selection.outlines(index))
+    }
+}
+
 /// Equatable：选中项变化时只重绘新旧两个格子，其他格子跳过
 private struct GridCell: View, Equatable {
     let tile: Tile
@@ -567,25 +579,25 @@ private struct GridCell: View, Equatable {
             case .folder(_, _, let icons):
                 FolderIcon(icons: icons)
             }
-            // 最多两行，按实际行数占高度，高亮底板跟着名字收缩；格子顶部对齐，同一行图标保持齐平
+            // 最多两行，键盘焦点边框跟随内容高度；同一行图标保持齐平。
             Text(name)
                 .font(.system(size: 11))
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .truncationMode(.tail)
-                .foregroundStyle(selected ? Color.white : Color.primary)
+                .foregroundStyle(Color.primary)
                 .padding(.horizontal, 4)
         }
         .padding(.vertical, 6)
         .frame(width: Layout.cellWidth - 4)
-        .background(
+        .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .fill(selected ? Color.accentColor : Color.clear)
+                .strokeBorder(selected ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                .allowsHitTesting(false)
         )
-        // 高亮淡入淡出，hover 扫过时不会一格格硬闪
-        .animation(.easeOut(duration: 0.1), value: selected)
-        // 命中范围跟随高亮区域，外层用于对齐的留白属于目录背景。
+        // 指针只覆盖图标和名称，外层留白仍属于目录背景。
         .contentShape(Rectangle())
+        .pointerStyle(.link)
         .padding(.top, 2)
         .frame(width: Layout.cellWidth, height: Layout.cellHeight, alignment: .top)
         .help(name)
@@ -633,11 +645,13 @@ private struct Row: View {
         }
         .padding(.horizontal, 8)
         .frame(height: Layout.rowHeight)
-        .foregroundStyle(selected ? Color.white : Color.primary)
-        .background(
+        .foregroundStyle(Color.primary)
+        .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .fill(selected ? Color.accentColor : Color.clear)
+                .strokeBorder(selected ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                .allowsHitTesting(false)
         )
         .contentShape(Rectangle())
+        .pointerStyle(.link)
     }
 }

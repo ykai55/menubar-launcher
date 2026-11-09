@@ -61,6 +61,29 @@ struct ScrollRequest: Equatable {
     let token: Int
 }
 
+/// Keyboard focus is independent of layout, drag state, and window resizing.
+/// Pointer input hides the outline without changing the keyboard's current index.
+@MainActor
+final class LauncherSelection: ObservableObject {
+    @Published private(set) var index = 0
+    @Published private(set) var showsKeyboardFocus = false
+
+    func select(_ index: Int) {
+        guard self.index != index else { return }
+        self.index = index
+    }
+
+    func useKeyboard() {
+        if !showsKeyboardFocus { showsKeyboardFocus = true }
+    }
+
+    func usePointer() {
+        if showsKeyboardFocus { showsKeyboardFocus = false }
+    }
+
+    func outlines(_ index: Int) -> Bool { showsKeyboardFocus && self.index == index }
+}
+
 @MainActor
 final class LauncherModel: ObservableObject {
     static let maxResults = 10
@@ -83,7 +106,11 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var folderPath: [Int] = []
     @Published private(set) var showingHidden = false
     private var hiddenRootPath: [Int]?
-    @Published var selection = 0
+    let selectionState = LauncherSelection()
+    var selection: Int {
+        get { selectionState.index }
+        set { selectionState.select(newValue) }
+    }
     /// 用户选过的模式；没选过时有目录就用定制模式，否则用顺序模式
     @Published private var chosenMode = UserDefaults.standard.string(forKey: "browseMode").flatMap(BrowseMode.init)
     var mode: BrowseMode { chosenMode ?? (config.folders.isEmpty ? .sorted : .custom) }
@@ -174,6 +201,7 @@ final class LauncherModel: ObservableObject {
 
     /// 跳到某个分组：标题贴顶，选中该组第一个应用
     func jump(to title: String) {
+        selectionState.usePointer()
         showingIndex = false
         guard canShowIndex else { return }
         guard let h = entries.firstIndex(where: { $0.id == "h:\(title)" }) else { return }
@@ -328,6 +356,7 @@ final class LauncherModel: ObservableObject {
 
     /// 面板隐藏后调用：清掉搜索和索引层，让网格在看不见的时候就恢复好，下次打开直接显示
     func resetAfterHide() {
+        selectionState.usePointer()
         cancelDrag()
         query = ""
         showingIndex = false
@@ -340,6 +369,7 @@ final class LauncherModel: ObservableObject {
     }
 
     func prepareForShow() {
+        selectionState.usePointer()
         selection = firstVisibleIndex()
         showToken += 1
     }
@@ -702,6 +732,7 @@ final class LauncherModel: ObservableObject {
     func move(_ dir: Direction) {
         let count = visibleCount
         guard count > 0 else { return }
+        selectionState.useKeyboard()
 
         if !isBrowsing {
             // 搜索结果是单列列表，上下循环
@@ -730,6 +761,7 @@ final class LauncherModel: ObservableObject {
 
     /// 启动选中的应用；选中的是目录就打开目录
     func launch(at index: Int? = nil) {
+        if index != nil { selectionState.usePointer() }
         let i = index ?? selection
         let app: AppItem
         if isBrowsing {

@@ -5,6 +5,7 @@ English | [简体中文](README.zh-CN.md)
 A macOS menu bar dropdown app launcher. Press ⌥Space or click the menu bar icon to get an icon grid with a fixed layout. It has two modes, switched with the toggle next to the search box or Tab: **Custom** shows pinned apps, a divider, then your folders mixed with unfiled apps, without section titles or an index. You can drag folders and apps to reorder them within their section. **A–Z** shows Pinned then visible apps by name (Chinese names sort by pinyin), ignoring folder hierarchy. There is no usage-based sorting, so apps stay where you remember them.
 
 - Type to search by name, pinyin (`weixin`), initials (`wx`, `vsc`)
+- Hover over an app or folder to see a hand cursor. Keyboard navigation shows a thin outline; moving the mouse or scrolling hides it.
 - In sorted mode, click a section header to jump to a letter
 - Pin and hide apps, organize them into nested folders, or hide whole folders
 - Open the hidden area with the eye-slash button beside search to browse, launch, and restore hidden items
