@@ -5,7 +5,7 @@ macOS 菜单栏下拉式应用启动器（Swift Package，SwiftUI + AppKit，无
 - 构建打包：`./build-app.sh` → `build/MenuLauncher.app`（本机 Swift 6.4 需要 `--build-system native`，否则报 developer directory 错误）。版本号读 `VERSION` 文件
 - 分发：`./make-dmg.sh` → `build/MenuLauncher.dmg`（arm64 + x86_64 通用二进制，ad-hoc 签名、未公证，别人首次打开前要 `xattr -dr com.apple.quarantine`；cask 的 postflight 会自动做）
 - 发版：推送 main 自动测试、发布通用 DMG/ZIP 和 skill ZIP、更新 Homebrew；规则见 README 的 Continuous deployment。VERSION 是版本下限，CI 自动递增补丁号并打 tag，不回写 main。`./make-release.sh X.Y.Z` 可选设置下限并推送 main。失败后直接重跑 Actions，复用 tag 和已公开的安装包；`TAP_DEPLOY_KEY` 须能写 homebrew-tap。
-- 源码在 `Sources/MenuLauncher/`：`AppIndex`（扫描应用、bundle id、拼音关键词）、`Config`（config.json 读写、应用引用匹配）、`CLI`（`--list-apps` / `--check` / `--config-path` / `--stats`，不启动界面）、`LauncherModel`（定制模式 固定 / 应用，目录和应用混排；顺序模式 固定 / A–Z 全部应用；Tab 或搜索框旁的开关切换，模式和各自的滚动位置存 UserDefaults，面板高度取两种模式顶层的较大值；目录导航、隐藏、搜索打分、配置文件监听）、`LauncherView`（图标网格、目录格子、搜索结果列表）、`AppDelegate`（状态栏图标、下拉面板、键盘处理）、`HotKey`（Carbon 全局快捷键；`Shortcut` 解析配置 `hotkey`，缺省 ⌥Space，`[]` 关闭，无修饰键只允许 F 键；配置变化时先释放旧注册，多个快捷键靠 EventHotKeyID 区分）
+- 源码在 `Sources/MenuLauncher/`：`AppIndex`（扫描应用、bundle id、拼音关键词）、`Config`（config.json 读写、应用引用匹配）、`CLI`（`--list-apps` / `--check` / `--config-path` / `--stats`，不启动界面）、`LauncherModel`（定制模式 固定 / 应用，目录和应用混排；顺序模式 固定 / A–Z 全部应用；设置 → 通用或 Tab 切换，模式和各自的滚动位置存 UserDefaults，面板高度取两种模式顶层的较大值；目录导航、隐藏、搜索打分、配置文件监听）、`LauncherView`（图标网格、目录格子、搜索结果列表）、`AppDelegate`（状态栏图标、下拉面板、键盘处理）、`HotKey`（Carbon 全局快捷键；`Shortcut` 解析配置 `hotkey`，缺省 ⌥Space，`[]` 关闭，无修饰键只允许 F 键；配置变化时先释放旧注册，多个快捷键靠 EventHotKeyID 区分）
 - 拖动排序：仅定制模式、同分组内。格子在同一个 ZStack 中按 GridGeometry 坐标摆放，跨行保持视图身份。DragGesture 移动格子本身，避免原生 onDrag 的残留图像；图标中心进入目标格内圈才换位，避免行边界反复跳动。拖动只改内存，松手写 pinned / order / 目录 order，取消则恢复快照。隐藏、搜索、换层和外部配置更新时取消拖动并停止定时器。
 - 拖动滚动：内容中的 `DragScrollSurface` 取得所属 NSScrollView，60Hz `.common` 定时器在上下边缘 40pt 内调用 NSClipView.scroll(to:)。按实际 bounds 偏移修正鼠标的网格坐标，兼容鼠标静止和滚轮滚动。旧的 alignmentGuide 移动锚点 + scrollTo 只改变模型偏移，实际内容不滚动，不能复用。
 - 拖动选中：applyConfig 重建前保存 tileKey，refilter 不重置选中项，重建后按身份恢复。只在 endDrag 末尾恢复不够：中途发布 selection=0 会让首格短暂高亮。回归测试 `swift test --build-system native` 检查发布的选中序列、实际 NSScrollView 偏移、图标位置、滚动边界和取消行为。
@@ -23,5 +23,7 @@ macOS 菜单栏下拉式应用启动器（Swift Package，SwiftUI + AppKit，无
 - 设计原则：利用空间记忆，应用位置稳定。不做使用频率等智能排序；配置里的顺序就是显示顺序
 - 本地化：`Localization.swift` 的 AppLanguage 支持 system / en / zh-Hans，配置缺省跟随系统；界面和 CLI 都要提供中英文。README.md 全英文，README.zh-CN.md 全中文（语言切换链接除外）。只翻译展示标签，固定 / 应用等内部 key 不变，不翻译用户目录名。
 - 设置：`SettingsView.swift` 是 AppDelegate 持有的独立原生窗口，齿轮、右键菜单或 ⌘, 打开。`PreferencesDraft` 保存时与窗口初始值比较，仅合并改动过的偏好到磁盘最新配置；先保存成功再 applyConfig，错误时不覆盖磁盘或应用内配置。新增配置或入口时同步两份 README 和 skill。
+- 设置中的浏览模式也经过草稿和保存流程，保存配置成功后才调用 setMode，沿用 UserDefaults 持久化；未改模式时保留通过面板切换的结果。
+- 每次打开设置先在 hide/activate 前取得可见弹窗的 screen，在该屏幕 visibleFrame 内居中；无可见弹窗时优先鼠标所在屏幕。复用已打开的设置窗口时保留草稿，也要重新定位。
 - 原生控件点击测试：NSSwitch 等控件会在 mouseDown 内进入 tracking loop，不能顺序 sendEvent(down) 再 sendEvent(up)。先用 NSApp.postEvent 排队 mouseUp，再发送 mouseDown；SwiftUI 控件未消费的 mouseUp 由测试取出补发。SettingsWindowTests 覆盖两种语言下保存、取消、切页及鼠标触发添加。
 - 经验：不要绑定 `scrollPosition`（hover 刷新时会把列表拉回旧位置）；滚动中频繁变化的值不要 @Published；不要在 @Published 的 didSet 里再赋值

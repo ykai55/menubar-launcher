@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A macOS menu bar dropdown app launcher. Press ⌥Space or click the menu bar icon to get an icon grid with a fixed layout. It has two modes, switched with the toggle next to the search box or Tab: **Custom** shows pinned apps, a divider, then your folders mixed with unfiled apps, without section titles or an index. You can drag folders and apps to reorder them within their section. **A–Z** shows Pinned then visible apps by name (Chinese names sort by pinyin), ignoring folder hierarchy. There is no usage-based sorting, so apps stay where you remember them.
+A macOS menu bar dropdown app launcher. Press ⌥Space or click the menu bar icon to get an icon grid with a fixed layout. Choose a browse mode in **Settings → General**, or press Tab while browsing: **Custom** shows pinned apps, a divider, then your folders mixed with unfiled apps, without section titles or an index. You can drag folders and apps to reorder them within their section. **A–Z** shows Pinned then visible apps by name (Chinese names sort by pinyin), ignoring folder hierarchy. There is no usage-based sorting, so apps stay where you remember them.
 
 - Type to search by name, pinyin (`weixin`), initials (`wx`, `vsc`)
 - Hover over an app or folder to see a hand cursor. Keyboard navigation shows a thin outline; moving the mouse or scrolling hides it.
@@ -61,10 +61,14 @@ menulauncher --stats 30    # usage summary for the last 30 days (JSON)
 
 Click the gear beside search, right-click the menu bar icon and choose **Settings…**, or press **⌘,** while the panel is open. `menulauncher --settings` opens settings when launching the app.
 
-- **General**: choose a language, enable or disable local usage recording, open the JSON config, and rescan installed apps.
+Settings opens on the same display as the launcher panel, or on the display under the pointer when the panel is closed.
+
+- **General**: choose a language and browse mode (Custom / A–Z), enable or disable local usage recording, open the JSON config, and rescan installed apps.
 - **Shortcuts**: edit keyboard shortcuts (one per line), add or remove mouse triggers, and open Accessibility settings.
 
 Click **Save** or press **⌘S** to apply changes immediately. **Cancel** discards unsaved changes. Invalid shortcuts and mouse bindings are rejected; keyboard registration failures are shown in the window. Saving merges only the preferences you changed into the latest config, preserving external changes to folders, pins, hidden items, and ordering.
+
+Browse mode is remembered in macOS preferences, along with each mode's scroll position.
 
 The optional `language` field accepts `"system"` (default), `"en"`, or `"zh-Hans"`. System mode chooses Chinese or English from your preferred languages and falls back to English. Language changes affect the launcher interface and CLI messages; installed app names follow macOS, and custom folder names remain as entered. Existing configs work without adding this field.
 

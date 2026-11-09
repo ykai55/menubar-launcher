@@ -7,10 +7,12 @@ import SwiftUI
 final class SettingsWindowTests: XCTestCase {
     func testSettingsWindowSaveCancelAndTabsInBothLanguages() throws {
         let previous = ProcessInfo.processInfo.environment["MENULAUNCHER_CONFIG"]
+        let previousMode = UserDefaults.standard.object(forKey: "browseMode")
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         setenv("MENULAUNCHER_CONFIG", dir.appendingPathComponent("config.json").path, 1)
         defer {
+            UserDefaults.standard.set(previousMode, forKey: "browseMode")
             if let previous { setenv("MENULAUNCHER_CONFIG", previous, 1) }
             else { unsetenv("MENULAUNCHER_CONFIG") }
             try? FileManager.default.removeItem(at: dir)
@@ -22,6 +24,7 @@ final class SettingsWindowTests: XCTestCase {
             let model = LauncherModel()
             model.loadConfig()
             model.reload(apps: [])
+            model.setMode(.sorted)
             var cancelled = false
             let hosting = NSHostingView(rootView: SettingsView(model: model, close: { cancelled = true }))
             hosting.frame = NSRect(x: 0, y: 0, width: 580, height: 540)
@@ -59,20 +62,42 @@ final class SettingsWindowTests: XCTestCase {
                 }
                 RunLoop.main.run(until: Date().addingTimeInterval(0.15))
             }
-            try capture("")
+            func selectMode(_ mode: BrowseMode) throws {
+                func find(in view: NSView) -> NSSegmentedControl? {
+                    if let control = view as? NSSegmentedControl,
+                       control.label(forSegment: 0) == BrowseMode.custom.title(language) {
+                        return control
+                    }
+                    return view.subviews.lazy.compactMap { find(in: $0) }.first
+                }
+                let control = try XCTUnwrap(find(in: hosting))
+                let point = control.convert(NSPoint(
+                    x: control.bounds.width * (mode == .custom ? 0.25 : 0.75),
+                    y: control.bounds.midY), to: nil)
+                try click(point.x, point.y)
+            }
             try click(518, 363) // Local usage toggle.
+            try selectMode(.custom)
             XCTAssertNil(model.config.recordUsage, "Changes remain a draft until Save")
+            XCTAssertEqual(model.mode, .sorted)
             try click(538, 28)
             XCTAssertEqual(try ConfigStore.load()?.recordUsage, false)
+            XCTAssertEqual(model.mode, .custom)
             try click(518, 363)
-            try click(480, 28)
-            XCTAssertTrue(cancelled)
+            try selectMode(.sorted)
+            try click(language == .english ? 470 : 480, 28)
+            XCTAssertTrue(cancelled, language.rawValue)
             XCTAssertEqual(try ConfigStore.load()?.recordUsage, false, "Cancel must not write the draft")
+            XCTAssertEqual(model.mode, .custom, "Cancel must not switch browse mode")
             try click(330, 508) // Shortcuts segment.
-            try capture("-shortcuts")
             try click(520, language == .english ? 286 : 302) // Add mouse trigger.
             try click(538, 28)
             XCTAssertEqual(try ConfigStore.load()?.mouse.map(\.button.raw), ["back"])
+            // Cache native controls only after interaction checks, since caching display
+            // can disturb their presentation and subsequent hit testing.
+            try capture("-shortcuts")
+            try click(230, 508)
+            try capture("")
         }
     }
 }

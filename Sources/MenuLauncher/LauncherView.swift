@@ -38,9 +38,6 @@ struct LauncherView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .focused($focused)
-                if model.isBrowsing {
-                    ModeSwitch(mode: model.mode) { model.setMode($0) }
-                }
                 Button { model.setShowingHidden(!model.showingHidden) } label: {
                     Image(systemName: model.showingHidden ? "eye.slash.fill" : "eye.slash")
                         .foregroundStyle(model.showingHidden ? Color.accentColor : .secondary)
@@ -443,38 +440,6 @@ struct GridGeometry {
             return row.indices[c]
         }
         return row.indices.last
-    }
-}
-
-/// 搜索框右侧的 定制 / 顺序 切换，Tab 键也能切。选中底板在两项之间滑动
-private struct ModeSwitch: View {
-    @Environment(\.launcherLanguage) private var language
-    let mode: BrowseMode
-    let onPick: (BrowseMode) -> Void
-
-    @Namespace private var ns
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach([BrowseMode.custom, .sorted], id: \.self) { m in
-                Text(m.title(language))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(m == mode ? Color.white : Color.secondary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 20)
-                    .background {
-                        if m == mode {
-                            Capsule().fill(Color.accentColor).matchedGeometryEffect(id: "pill", in: ns)
-                        }
-                    }
-                    .contentShape(Capsule())
-                    .onTapGesture { onPick(m) }
-            }
-        }
-        .padding(2)
-        .background(Capsule().fill(Color.primary.opacity(0.06)))
-        .animation(.spring(duration: 0.25, bounce: 0.15), value: mode)
-        .help(language.text("Switch Custom / A–Z (Tab). Drag to reorder in Custom mode.", "切换定制 / 顺序（Tab）。定制模式下可以拖动调整目录和应用的顺序"))
     }
 }
 

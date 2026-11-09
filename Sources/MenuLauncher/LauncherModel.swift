@@ -221,6 +221,7 @@ final class LauncherModel: ObservableObject {
         configDate = ConfigStore.modificationDate
         configError = nil
         applyConfig()
+        if draft.mode != baseline.mode { setMode(draft.mode) }
     }
 
     private var apps: [AppItem] = []

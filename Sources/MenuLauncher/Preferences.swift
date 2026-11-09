@@ -7,12 +7,14 @@ struct MousePreference: Identifiable, Equatable {
 }
 
 struct PreferencesDraft: Equatable {
+    var mode: BrowseMode
     var language: AppLanguage
     var recordUsage: Bool
     var hotkeys: String
     var mouse: [MousePreference]
 
-    init(_ config: LauncherConfig) {
+    init(_ config: LauncherConfig, mode: BrowseMode) {
+        self.mode = mode
         language = config.language ?? .system
         recordUsage = config.recordUsage ?? true
         hotkeys = (config.hotkey ?? Shortcut.defaults).joined(separator: "\n")

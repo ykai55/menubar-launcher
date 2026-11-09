@@ -14,7 +14,7 @@ struct SettingsView: View {
     init(model: LauncherModel, close: @escaping () -> Void) {
         self.model = model
         self.close = close
-        let preferences = PreferencesDraft(model.config)
+        let preferences = PreferencesDraft(model.config, mode: model.mode)
         _baseline = State(initialValue: preferences)
         _draft = State(initialValue: preferences)
     }
@@ -78,6 +78,16 @@ struct SettingsView: View {
                 Toggle(language.text("Record usage locally", "在本机记录使用情况"), isOn: $draft.recordUsage)
                 Text(language.text("Records panel opens and app launches in usage.jsonl. Nothing is uploaded and your layout stays fixed.",
                                    "将面板打开和应用启动记录到 usage.jsonl，不上传，也不会自动调整应用顺序。"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Picker(language.text("Browse mode", "浏览模式"), selection: $draft.mode) {
+                    Text(BrowseMode.custom.title(language)).tag(BrowseMode.custom)
+                    Text(BrowseMode.sorted.title(language)).tag(BrowseMode.sorted)
+                }
+                .pickerStyle(.segmented)
+                Text(language.text("Custom keeps your folders and order. A–Z lists apps by name.",
+                                   "定制模式保留目录和手动排序；顺序模式按名称或拼音排列应用。"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section(language.text("Configuration", "配置文件")) {
@@ -146,7 +156,7 @@ struct SettingsView: View {
     private func save() {
         do {
             try model.savePreferences(draft, baseline: baseline)
-            let current = PreferencesDraft(model.config)
+            let current = PreferencesDraft(model.config, mode: model.mode)
             baseline = current
             draft = current
             error = nil

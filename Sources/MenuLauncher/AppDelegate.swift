@@ -206,20 +206,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func editConfig() { model.openConfig() }
 
     @objc func openSettings() {
+        // Capture the launcher's screen before hiding it or activating the settings window.
+        let pointer = NSEvent.mouseLocation
+        let screen = (panel?.isVisible == true ? panel?.screen : nil)
+            ?? NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) }
+            ?? statusItem?.button?.window?.screen
+            ?? NSScreen.main
         hide()
         model.cancelDrag()
-        if let window = settingsWindow, window.isVisible {
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
         let window = settingsWindow ?? NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 580, height: 540),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.title = model.language.text("MenuLauncher Settings", "MenuLauncher 设置")
-        window.contentView = NSHostingView(rootView: SettingsView(model: model) { [weak window] in window?.close() })
-        if settingsWindow == nil { window.center() }
+        if !window.isVisible {
+            window.contentView = NSHostingView(rootView: SettingsView(model: model) { [weak window] in window?.close() })
+        }
+        if let visible = screen?.visibleFrame {
+            window.setFrameOrigin(NSPoint(x: visible.midX - window.frame.width / 2,
+                                          y: visible.midY - window.frame.height / 2))
+        } else {
+            window.center()
+        }
         settingsWindow = window
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)

@@ -5,7 +5,7 @@ description: Install, update, and organize MenuLauncher, a macOS menu bar app la
 
 # MenuLauncher
 
-MenuLauncher is a menu bar dropdown launcher for macOS 15+ (⌥Space by default, configurable, or click the menu bar icon). Apps stay in fixed positions without usage-based sorting. 定制 (custom) mode shows pinned apps and a mixed grid of folders and unfiled apps, separated by a line, without titles or an index. Tiles can be dragged within their section. 顺序 (sorted) mode shows visible apps A–Z by name or pinyin and supports a section index. The toggle or Tab switches modes. The eye-slash button beside search opens the hidden area. All organization lives in a JSON config file that the app reloads automatically.
+MenuLauncher is a menu bar dropdown launcher for macOS 15+ (⌥Space by default, configurable, or click the menu bar icon). Apps stay in fixed positions without usage-based sorting. 定制 (custom) mode shows pinned apps and a mixed grid of folders and unfiled apps, separated by a line, without titles or an index. Tiles can be dragged within their section. 顺序 (sorted) mode shows visible apps A–Z by name or pinyin and supports a section index. Choose the mode in Settings → General, or press Tab while browsing. The eye-slash button beside search opens the hidden area. All organization lives in a JSON config file that the app reloads automatically.
 
 ## Install and update
 
@@ -64,7 +64,7 @@ If the user doesn't want recording, set `"recordUsage": false` in the config. To
 
 ## Config format
 
-Settings are available through the gear beside search, the menu bar icon's **Settings…** menu, or ⌘, while the panel is open. General includes language and local usage recording; Shortcuts includes keyboard and mouse bindings. Save applies changes immediately to the same JSON file and merges only preferences changed in that window. `menulauncher --settings` opens settings on launch. Preserve these preferences when organizing apps.
+Settings are available through the gear beside search, the menu bar icon's **Settings…** menu, or ⌘, while the panel is open. General includes language, browse mode (Custom / A–Z), and local usage recording; Shortcuts includes keyboard and mouse bindings. Save applies only preferences changed in that window. Browse mode is stored in macOS preferences; other settings are merged into the same JSON file. `menulauncher --settings` opens settings on launch. Preserve these preferences when organizing apps.
 
 ```json
 {
