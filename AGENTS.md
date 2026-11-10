@@ -17,6 +17,7 @@ macOS 菜单栏下拉式应用启动器（Swift Package，SwiftUI + AppKit，无
 - 配置：`~/.config/menulauncher/config.json`（`MENULAUNCHER_CONFIG` 环境变量可覆盖，测试用），字段 hotkey / mouse / pinned / hidden / folders（可嵌套）/ order（定制模式顶层目录和应用混排顺序，目录写 "folder:名字"；目录内也可有 order）。同时监听目录（原子替换写入）和文件本身（原地写入）。JSON 出错时保留上次配置并在面板顶部显示错误。旧版 UserDefaults 里的 pinned 首次启动时迁移进配置
 - 鼠标触发：`MouseTrigger.swift` 用 CGEventTap 监听配置 `mouse` 里的鼠标键（+修饰键），匹配到就吞掉按下和松开事件，并在鼠标处打开面板（`positionAtMouse`）。需要辅助功能权限，没有时提示一次并每 3 秒重试。ad-hoc 签名默认按 cdhash 匹配，每次编译都变，授权会失效（设置里显示已开但不生效、每次启动都弹）。所以 build-app.sh / make-dmg.sh 签名时指定 `-r='designated => identifier "local.menulauncher"'`，按 bundle id 匹配。授权状态乱了可以 `tccutil reset Accessibility local.menulauncher` 后重新授权
 - 使用记录：`Usage.swift` 往配置同目录的 `usage.jsonl` 追加 open（hotkey/click）和 launch（via pinned/grid/folder/search，带 query 或 folder）事件，后台队列写入；`--stats [天数]` 汇总。配置 `recordUsage: false` 关闭。应用自己不按它排序，只给 agent 参考
+- 鼠标触发的定位以面板中心对准光标，再限制到所在屏幕 visibleFrame 内（6pt 边距）；动画锚点仍取调整后面板内的实际光标位置。
 - `skills/menulauncher/SKILL.md`：教 agent 安装/更新、用 CLI 列应用、改配置、校验。改配置格式或 CLI 时同步更新它和 README
 - 最低系统版本 macOS 15（用到 `onScrollGeometryChange`）；Info.plist 必须声明 `CFBundleLocalizations` 含中文，否则应用名会显示成英文
 - Safari 在 `/System/Cryptexes/App/System/Applications`，/Applications 下的是带 hidden 标志的符号链接，扫描时要单独加这个目录

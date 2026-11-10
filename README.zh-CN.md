@@ -96,7 +96,7 @@ menulauncher --stats 30    # 最近 30 天的使用汇总（JSON）
 
 ### 鼠标触发
 
-使用鼠标侧键或“修饰键 + 鼠标键”，在光标位置打开面板：
+使用鼠标侧键或“修饰键 + 鼠标键”，让面板中心对准光标打开；靠近屏幕边缘时自动调整位置，保持面板完整可见：
 
 ```json
 { "mouse": [{ "button": "back" }, { "button": "forward", "modifiers": ["option"] }] }

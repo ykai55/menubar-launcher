@@ -28,7 +28,7 @@ After the app is running, ask the user how they want to open the panel. Use the 
 
 - **⌥Space (Option-Space)**: the default, opens the panel under the menu bar icon. Nothing to write.
 - **Another key combination**: ask which one, then write it to `hotkey`, for example `"hotkey": ["command+shift+l"]`. Mention that ⌥Space stops working unless they keep it in the list.
-- **Mouse side button (back)**: opens the panel at the cursor. Writes `"mouse": [{"button": "back"}]`. The browser's Back on that button stops working.
+- **Mouse side button (back)**: opens the panel centered on the cursor, shifting inward near screen edges. Writes `"mouse": [{"button": "back"}]`. The browser's Back on that button stops working.
 - **Option + side button**: same, but the side button keeps working as Back in the browser. Writes `"mouse": [{"button": "back", "modifiers": ["option"]}]`.
 - **Not now**: change nothing.
 

@@ -303,13 +303,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 面板左上角放在鼠标处，超出所在屏幕时往回收
+    /// 面板中心对准鼠标，超出所在屏幕时往回收
     private func positionAtMouse() {
         let p = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) } ?? NSScreen.main!
         let v = screen.visibleFrame
-        let x = min(max(p.x, v.minX + 6), v.maxX - panel.frame.width - 6)
-        let top = max(min(p.y, v.maxY - 6), v.minY + panel.frame.height + 6)
+        let x = min(max(p.x - panel.frame.width / 2, v.minX + 6), v.maxX - panel.frame.width - 6)
+        let top = max(min(p.y + panel.frame.height / 2, v.maxY - 6), v.minY + panel.frame.height + 6)
         panel.setFrameTopLeftPoint(NSPoint(x: x, y: top))
         popAnchor = CGPoint(x: min(max(p.x - x, 0), panel.frame.width), y: min(max(p.y - (top - panel.frame.height), 0), panel.frame.height))
     }

@@ -84,7 +84,7 @@ Write modifiers (`command`, `option`, `control`, `shift`) and a key joined by `+
 
 ### Mouse buttons
 
-Open the panel at the cursor with a mouse side button (or a button + modifier combo):
+Open the panel centered on the cursor with a mouse side button (or a button + modifier combo). Near screen edges, the panel shifts to stay within the visible area:
 
 ```json
 { "mouse": [{ "button": "back" }, { "button": "forward", "modifiers": ["option"] }] }
