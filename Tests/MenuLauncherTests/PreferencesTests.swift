@@ -70,18 +70,37 @@ final class PreferencesTests: XCTestCase {
             window.alphaValue = 0
             window.orderFront(nil)
             defer { window.orderOut(nil) }
-            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
             func scrollView(in view: NSView) -> NSScrollView? {
                 if let scroll = view as? NSScrollView { return scroll }
                 return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
             }
-            let scroll = try XCTUnwrap(scrollView(in: hosting))
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 240))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-            XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0)
+            // SwiftUI creates the document and restores scrolling asynchronously.
+            // Wait for a genuinely scrolled viewport instead of assuming CI has
+            // finished both operations after a fixed 150ms.
+            let readyDeadline = Date().addingTimeInterval(3)
+            var scrolled: NSScrollView?
+            repeat {
+                hosting.layoutSubtreeIfNeeded()
+                if let candidate = scrollView(in: hosting),
+                   let document = candidate.documentView,
+                   document.bounds.height > candidate.contentSize.height + 240 {
+                    candidate.contentView.scroll(to: NSPoint(x: 0, y: 240))
+                    candidate.reflectScrolledClipView(candidate.contentView)
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                    if candidate.contentView.bounds.minY >= 200 {
+                        scrolled = candidate
+                        break
+                    }
+                } else {
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                }
+            } while Date() < readyDeadline
+            let scroll = try XCTUnwrap(scrolled, "The initial viewport must actually be scrolled in \(mode)")
             model.prepareForShow(alignFirstIcon: true)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let resetDeadline = Date().addingTimeInterval(3)
+            while scroll.contentView.bounds.minY > 1, Date() < resetDeadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
             XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 1,
                            "Mouse opening must scroll the native viewport, not just reset the saved offset")
             model.query = "App 8"
