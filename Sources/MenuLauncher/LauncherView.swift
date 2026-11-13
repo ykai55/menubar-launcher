@@ -9,6 +9,10 @@ enum Layout {
     static let columns = 6
     static let cellWidth: CGFloat = (width - padding * 2) / CGFloat(columns)
     static let cellHeight: CGFloat = 88
+    static let iconSize: CGFloat = 40
+    static let cellVerticalPadding: CGFloat = 6
+    static let cellTopPadding: CGFloat = 2
+    static let gridTopAnchor = "top"
     /// 上方 8 + 胶囊 22 + 下方 8 的间隙
     static let headerHeight: CGFloat = 38
     static let dividerHeight: CGFloat = 13
@@ -23,6 +27,16 @@ enum Layout {
     static func gridHeight(headers: Int, rows: Int) -> CGFloat {
         let content = padding * 2 + CGFloat(headers) * headerHeight + CGFloat(rows) * cellHeight
         return searchHeight + 1 + min(content, maxGridHeight)
+    }
+
+    /// iconFromTop uses the view's top-left coordinates; screen coordinates grow upward.
+    static func mousePopupFrame(size: NSSize, pointer: NSPoint, iconFromTop: NSPoint,
+                                visibleFrame: NSRect) -> NSRect {
+        let x = pointer.x - iconFromTop.x
+        let y = pointer.y + iconFromTop.y - size.height
+        return NSRect(x: max(visibleFrame.minX + 6, min(x, visibleFrame.maxX - size.width - 6)),
+                      y: max(visibleFrame.minY + 6, min(y, visibleFrame.maxY - size.height - 6)),
+                      width: size.width, height: size.height)
     }
 }
 
@@ -52,6 +66,7 @@ struct LauncherView: View {
                 .buttonStyle(.plain).focusable(false)
                 .help(model.language.text("Settings… (⌘,)", "设置…（⌘,）"))
                 .accessibilityLabel(model.language.text("Settings", "设置"))
+                UpdateButton(updater: model.updater)
             }
             .padding(.horizontal, 12)
             .frame(height: Layout.searchHeight)
@@ -90,7 +105,7 @@ struct LauncherView: View {
             ScrollView {
               VStack(spacing: 0) {
                 // 内容最顶端（含上边距）的锚点，恢复到第一项时滚到这里，不会把上边距滚出去
-                Color.clear.frame(height: 0).id(Self.topAnchor)
+                Color.clear.frame(height: 0).id(Layout.gridTopAnchor)
                 // 摊平成一层：每个分组标题、每行都是固定高度、id 唯一的子项，供滚动定位。
                 // 行只占位，格子全部放在上面同一层里按坐标摆：拖动让位时每个图标只是换位置，
                 // 跨行也是同一个视图滑过去。分行放在各自 HStack 里时，跨行等于旧行删一个、新行插一个，会同时看到两个
@@ -164,7 +179,13 @@ struct LauncherView: View {
             .onAppear { if !model.inFolder && !model.showingHidden { restoreScroll(proxy) } }
             .onChange(of: model.scrollRequest) {
                 guard let r = model.scrollRequest else { return }
-                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(r.rowID, anchor: r.anchor) }
+                if r.animated {
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(r.rowID, anchor: r.anchor) }
+                } else {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { proxy.scrollTo(r.rowID, anchor: r.anchor) }
+                }
             }
             // 索引层常驻，只切换透明度和命中测试。按需插入/移除时，移除后 ScrollView 的鼠标跟踪不会立即恢复，
             // 要再点一下才能滚动
@@ -194,12 +215,10 @@ struct LauncherView: View {
         .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity)
     }
 
-    private static let topAnchor = "top"
-
     private func restoreScroll(_ proxy: ScrollViewProxy) {
         guard let id = model.entryIDForSavedOffset() else { return }
         // 第一项就滚到最顶端；直接 scrollTo 第一项会把上边距也滚出去，列表看起来往上错了几个像素
-        let target = id == model.entries.first?.id ? Self.topAnchor : id
+        let target = id == model.entries.first?.id ? Layout.gridTopAnchor : id
         // 不带动画：恢复发生在换层过渡里，带上过渡的动画会让列表滑一下再停住
         DispatchQueue.main.async {
             var t = Transaction()
@@ -540,7 +559,7 @@ private struct GridCell: View, Equatable {
             case .app(let app):
                 Image(nsImage: app.icon)
                     .resizable()
-                    .frame(width: 40, height: 40)
+                    .frame(width: Layout.iconSize, height: Layout.iconSize)
             case .folder(_, _, let icons):
                 FolderIcon(icons: icons)
             }
@@ -553,7 +572,7 @@ private struct GridCell: View, Equatable {
                 .foregroundStyle(Color.primary)
                 .padding(.horizontal, 4)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, Layout.cellVerticalPadding)
         .frame(width: Layout.cellWidth - 4)
         .overlay(
             RoundedRectangle(cornerRadius: 6)
@@ -563,7 +582,7 @@ private struct GridCell: View, Equatable {
         // 指针只覆盖图标和名称，外层留白仍属于目录背景。
         .contentShape(Rectangle())
         .pointerStyle(.link)
-        .padding(.top, 2)
+        .padding(.top, Layout.cellTopPadding)
         .frame(width: Layout.cellWidth, height: Layout.cellHeight, alignment: .top)
         .help(name)
     }
@@ -576,7 +595,7 @@ private struct FolderIcon: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 9)
             .fill(Color.primary.opacity(0.12))
-            .frame(width: 40, height: 40)
+            .frame(width: Layout.iconSize, height: Layout.iconSize)
             .overlay {
                 if icons.isEmpty {
                     Image(systemName: "folder.fill")

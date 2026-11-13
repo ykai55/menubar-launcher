@@ -73,22 +73,54 @@ struct ButtonRef: Codable, Equatable {
 @MainActor
 final class MouseTrigger {
     var bindings: [(button: Int, flags: CGEventFlags)] = [] {
-        didSet { bindings.isEmpty ? stop() : start() }
+        didSet {
+            deliveryGeneration += 1
+            Diagnostics.record("mouse.bindings", ["buttons": bindings.map { String($0.button) }.joined(separator: ",")])
+            if listens { bindings.isEmpty ? stop() : start() }
+        }
     }
+    private let listens: Bool
     private let handler: () -> Void
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var retry: Timer?
     private var prompted = false
+    private var deliveryGeneration = 0
+    private var reportedFailure = false
+    private var lastHealthCheck = ProcessInfo.processInfo.systemUptime
     /// 按下时吞掉的键，松开事件也要一起吞掉
     private var swallowing = Set<Int>()
 
     private static let relevant: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
 
-    init(handler: @escaping () -> Void) { self.handler = handler }
+    init(listens: Bool = true, handler: @escaping () -> Void) {
+        self.listens = listens
+        self.handler = handler
+    }
 
     private func start() {
-        guard tap == nil else { return }
+        if retry == nil {
+            lastHealthCheck = ProcessInfo.processInfo.systemUptime
+            let timer = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.checkHealth() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            retry = timer
+        }
+        if let tap {
+            if CFMachPortIsValid(tap) {
+                if !CGEvent.tapIsEnabled(tap: tap) {
+                    Diagnostics.record("mouse.tap_reenable", ["reason": "watchdog"])
+                    swallowing.removeAll()
+                    CGEvent.tapEnable(tap: tap, enable: true)
+                }
+                return
+            }
+            if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+            self.source = nil
+            self.tap = nil
+            Diagnostics.record("mouse.tap_invalid")
+        }
         let mask = (1 << CGEventType.otherMouseDown.rawValue) | (1 << CGEventType.otherMouseUp.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.rightMouseDown.rawValue)
             | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.rightMouseUp.rawValue)
@@ -98,40 +130,64 @@ final class MouseTrigger {
             let me = Unmanaged<MouseTrigger>.fromOpaque(ctx!).takeUnretainedValue()
             return MainActor.assumeIsolated { me.handle(type, event) }
         }, userInfo: me) else {
+            if !reportedFailure {
+                reportedFailure = true
+                Diagnostics.record("mouse.tap_create_failed", ["accessibility": String(AXIsProcessTrusted())])
+            }
             // 没有辅助功能权限：弹一次系统授权提示，之后每隔几秒重试，授权后自动生效
             if !prompted {
                 prompted = true
                 let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
                 _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
             }
-            if retry == nil {
-                retry = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.start() }
-                }
-            }
             return
         }
-        retry?.invalidate()
-        retry = nil
+        reportedFailure = false
         self.tap = tap
         source = CFMachPortCreateRunLoopSource(nil, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        Diagnostics.record("mouse.tap_ready", ["enabled": String(CGEvent.tapIsEnabled(tap: tap))])
     }
 
-    private func stop() {
+    private func checkHealth() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastHealthCheck > 3.5 {
+            Diagnostics.record("main_loop.delay", ["seconds": String(format: "%.2f", now - lastHealthCheck - 3)])
+        }
+        lastHealthCheck = now
+        for button in swallowing {
+            guard let number = UInt32(exactly: button), let mouseButton = CGMouseButton(rawValue: number),
+                  !CGEventSource.buttonState(.hidSystemState, button: mouseButton) else { continue }
+            swallowing.remove(button)
+            Diagnostics.record("mouse.release_recovered", ["button": String(button)])
+        }
+        if !bindings.isEmpty { start() }
+    }
+
+    func recover(reason: String) {
+        Diagnostics.record("mouse.recover", ["reason": reason])
+        stop()
+        if listens && !bindings.isEmpty { start() }
+    }
+
+    func stop() {
+        deliveryGeneration += 1
         retry?.invalidate()
         retry = nil
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         tap = nil
         source = nil
+        swallowing.removeAll()
     }
 
-    private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
+    func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // 系统觉得回调太慢会把 tap 关掉，重新打开
+            Diagnostics.record("mouse.tap_disabled", ["reason": type == .tapDisabledByTimeout ? "timeout" : "user_input"])
+            swallowing.removeAll()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         default: break
@@ -140,9 +196,22 @@ final class MouseTrigger {
         let flags = event.flags.intersection(Self.relevant)
         switch type {
         case .otherMouseDown, .leftMouseDown, .rightMouseDown:
-            guard bindings.contains(where: { $0.button == button && $0.flags == flags }) else { break }
-            swallowing.insert(button)
-            handler()
+            guard bindings.contains(where: { $0.button == button && $0.flags == flags }) else {
+                if button >= 2 || bindings.contains(where: { $0.button == button }) {
+                    Diagnostics.record("mouse.unmatched", ["button": String(button), "flags": String(flags.rawValue)])
+                }
+                break
+            }
+            guard swallowing.insert(button).inserted else { return nil }
+            let generation = deliveryGeneration
+            let received = ProcessInfo.processInfo.systemUptime
+            Diagnostics.record("mouse.matched", ["button": String(button), "flags": String(flags.rawValue)])
+            // Return to WindowServer before AppKit starts layout or requests focus.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.deliveryGeneration == generation else { return }
+                Diagnostics.record("mouse.delivered", ["delay_ms": String(format: "%.1f", (ProcessInfo.processInfo.systemUptime - received) * 1000)])
+                self.handler()
+            }
             return nil
         case .otherMouseUp, .leftMouseUp, .rightMouseUp:
             if swallowing.remove(button) != nil { return nil }

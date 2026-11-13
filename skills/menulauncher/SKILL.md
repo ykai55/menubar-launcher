@@ -18,6 +18,8 @@ open -a MenuLauncher
 
 Update with `brew upgrade --cask menulauncher`. This quits the running app, so reopen it with `open -a MenuLauncher` afterwards.
 
+The app checks for stable releases on startup and panel opening, at most every six hours (15 minutes after a failed check). A newer version adds **Upgrade / 升级** in the top-right corner; clicking downloads, verifies, installs, and restarts while preserving config. **Check for updates… / 检查更新…** in the menu bar icon's right-click menu forces a check. In-app installation requires a writable app location and does not update Homebrew's installed-version records. If installation is blocked by permissions or a read-only disk image, use Homebrew or move the app into Applications.
+
 Without Homebrew, download `MenuLauncher.dmg` from https://github.com/ykai55/menubar-launcher/releases/latest and drag the app into /Applications. The app is not notarized, so run `xattr -dr com.apple.quarantine /Applications/MenuLauncher.app` before the first launch. The Homebrew cask does this for you.
 
 The cask also installs a `menulauncher` command. If it is missing (for example after a DMG install), use `/Applications/MenuLauncher.app/Contents/MacOS/MenuLauncher` instead.
@@ -28,7 +30,7 @@ After the app is running, ask the user how they want to open the panel. Use the 
 
 - **⌥Space (Option-Space)**: the default, opens the panel under the menu bar icon. Nothing to write.
 - **Another key combination**: ask which one, then write it to `hotkey`, for example `"hotkey": ["command+shift+l"]`. Mention that ⌥Space stops working unless they keep it in the list.
-- **Mouse side button (back)**: opens the panel centered on the cursor, shifting inward near screen edges. Writes `"mouse": [{"button": "back"}]`. The browser's Back on that button stops working.
+- **Mouse side button (back)**: opens with the first pinned icon centered under the cursor and the grid at the top; without pins, uses the first available icon. Shifts inward near screen edges. Writes `"mouse": [{"button": "back"}]`. The browser's Back on that button stops working.
 - **Option + side button**: same, but the side button keeps working as Back in the browser. Writes `"mouse": [{"button": "back", "modifiers": ["option"]}]`.
 - **Not now**: change nothing.
 
@@ -39,6 +41,12 @@ The user can pick a mouse option in addition to a keyboard shortcut. If they pic
 3. If the back button does nothing, have them try `forward`. Field details are under `mouse` in [Config format](#config-format).
 
 Run `menulauncher --check` after writing `hotkey` too. Skip this question for updates and when the config already has a `mouse` or `hotkey` entry.
+
+## Diagnose opening failures
+
+Read `~/Library/Logs/MenuLauncher/launcher.log` around the reported time (and `launcher.log.1` after rotation). Follow `mouse.matched` → `mouse.delivered` → `panel.show_requested` → `panel.show_settled`; check `mouse.tap_create_failed`, `mouse.tap_disabled`, `main_loop.delay`, and `panel.hide_requested`'s `reason`. For menu bar right-clicks, check `status.clicked` and `status.menu_open/menu_closed`. Plain menu bar right-click opens a context menu; global right-click needs a configured modifier. The listener recovers every three seconds and after wake/session activation. These local diagnostics are independent of usage recording and contain no search or launched-app content.
+
+Scans run in the background at startup, on manual Rescan, and after filesystem changes in application directories (one-second debounce). Changes during a scan request one follow-up; closing the popup does not scan. The existing app list remains available. Check `scan.watch_started` / `scan.watch_failed` and `scan.directory_changed` for notification delivery, then compare `scan.begin` / `scan.finished` (`duration_ms` and main-thread `apply_ms`) with the input log above.
 
 ## Workflow for organizing
 

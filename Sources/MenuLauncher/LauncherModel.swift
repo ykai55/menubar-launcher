@@ -59,6 +59,7 @@ struct ScrollRequest: Equatable {
     /// nil 表示滚到刚好可见即可；跳转到字母分组时用 .top，让标题贴顶
     var anchor: UnitPoint? = nil
     let token: Int
+    var animated = true
 }
 
 /// Keyboard focus is independent of layout, drag state, and window resizing.
@@ -107,6 +108,18 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var showingHidden = false
     private var hiddenRootPath: [Int]?
     let selectionState = LauncherSelection()
+    let updater: AppUpdater
+    private let scanApps: () -> [AppItem]
+    private let scanQueue = DispatchQueue(label: "menulauncher.app-scan", qos: .utility)
+    private var scanGeneration = 0
+    private var scanInProgress = false
+    private var scanDirty = false
+    private var appMonitor: AppDirectoryMonitor?
+
+    init(updater: AppUpdater? = nil, scanApps: @escaping () -> [AppItem] = { AppIndex.scan() }) {
+        self.updater = updater ?? AppUpdater()
+        self.scanApps = scanApps
+    }
     var selection: Int {
         get { selectionState.index }
         set { selectionState.select(newValue) }
@@ -227,7 +240,6 @@ final class LauncherModel: ObservableObject {
     private var apps: [AppItem] = []
     /// 去掉隐藏应用之后的，网格和搜索都只用它
     private var shownApps: [AppItem] = []
-    private var lastScan = Date.distantPast
     private var dirWatcher: DispatchSourceFileSystemObject?
     private var fileWatcher: DispatchSourceFileSystemObject?
     private var configDate: Date?
@@ -245,10 +257,70 @@ final class LauncherModel: ObservableObject {
     }
 
     func reload(apps scanned: [AppItem]? = nil) {
+        guard let scanned else {
+            scanInBackground()
+            return
+        }
+        // Explicit snapshots supersede any older in-flight scan.
+        scanGeneration += 1
+        scanInProgress = false
+        scanDirty = false
+        installScan(scanned)
+    }
+
+    private func installScan(_ scanned: [AppItem]) {
         cancelDrag()
-        apps = scanned ?? AppIndex.scan()
-        lastScan = Date()
+        apps = scanned
         applyConfig()
+    }
+
+    func startWatchingApps() {
+        guard appMonitor == nil else { return }
+        let monitor = AppDirectoryMonitor { [weak self] in
+            MainActor.assumeIsolated { self?.appDirectoriesChanged() }
+        }
+        if monitor.start() { appMonitor = monitor }
+    }
+
+    func stopWatchingApps() {
+        appMonitor?.stop()
+        appMonitor = nil
+    }
+
+    func appDirectoriesChanged() {
+        if scanInProgress { scanDirty = true }
+        else { scanInBackground() }
+    }
+
+    private func scanInBackground() {
+        guard !scanInProgress else { return }
+        scanInProgress = true
+        scanGeneration += 1
+        let generation = scanGeneration
+        let scan = scanApps
+        let started = ProcessInfo.processInfo.systemUptime
+        Diagnostics.record("scan.begin")
+        scanQueue.async { [weak self] in
+            // File traversal, bundle metadata, transliteration and independent
+            // bitmap contexts all stay off the input/WindowServer run loop.
+            let scanned = autoreleasepool { scan() }
+            let finished = ProcessInfo.processInfo.systemUptime
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.scanGeneration == generation else { return }
+                self.scanInProgress = false
+                let applying = ProcessInfo.processInfo.systemUptime
+                self.installScan(scanned)
+                Diagnostics.record("scan.finished", [
+                    "duration_ms": String(format: "%.1f", (finished - started) * 1000),
+                    "apply_ms": String(format: "%.1f", (ProcessInfo.processInfo.systemUptime - applying) * 1000),
+                    "count": String(scanned.count)
+                ])
+                if self.scanDirty {
+                    self.scanDirty = false
+                    self.scanInBackground()
+                }
+            }
+        }
     }
 
     // MARK: - 配置
@@ -350,11 +422,6 @@ final class LauncherModel: ObservableObject {
             .filter { seen.insert($0.id).inserted }
     }
 
-    /// 距上次扫描超过 5 分钟就重扫，用来发现新装/卸载的应用
-    func reloadIfStale() {
-        if Date().timeIntervalSince(lastScan) > 300 { reload() }
-    }
-
     /// 面板隐藏后调用：清掉搜索和索引层，让网格在看不见的时候就恢复好，下次打开直接显示
     func resetAfterHide() {
         selectionState.usePointer()
@@ -369,10 +436,29 @@ final class LauncherModel: ObservableObject {
         }
     }
 
-    func prepareForShow() {
+    func prepareForShow(alignFirstIcon: Bool = false) {
+        if alignFirstIcon {
+            // Mouse opening always exposes the pinned row, including a reopen
+            // that interrupts closing while search or a folder is still visible.
+            resetAfterHide()
+            scrollOffset = 0
+            scrollRequest = ScrollRequest(rowID: Layout.gridTopAnchor, anchor: .top,
+                                          token: (scrollRequest?.token ?? 0) + 1, animated: false)
+        }
         selectionState.usePointer()
         selection = firstVisibleIndex()
         showToken += 1
+    }
+
+    /// The first tile is the first resolved pinned app, or the first available
+    /// tile when there are no pins. Section headers and error banners shift it.
+    var firstIconFromTop: NSPoint? {
+        guard let first = entries.lazy.compactMap(\.indices.first).first else { return nil }
+        let origin = GridGeometry(entries: entries, count: browseItems.count).origins[first]
+        return NSPoint(x: Layout.padding + origin.x + Layout.cellWidth / 2,
+                       y: Layout.searchHeight + 1 + (configError == nil ? 0 : Layout.errorHeight)
+                        + Layout.padding + origin.y + Layout.cellTopPadding
+                        + Layout.cellVerticalPadding + Layout.iconSize / 2)
     }
 
     /// 选中项落在当前可见的第一整行，避免回车启动一个看不见的应用

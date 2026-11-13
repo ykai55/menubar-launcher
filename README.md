@@ -23,6 +23,10 @@ open -a MenuLauncher
 
 Update with `brew upgrade --cask menulauncher`.
 
+MenuLauncher also checks for stable GitHub releases on startup and when you open the panel (at most once every six hours; failed checks retry after 15 minutes). When a newer version is available, **Upgrade** appears in the top-right corner. Click it to download, verify, install, and restart; your configuration stays intact. The menu bar icon's right-click menu includes **Check for updates…** for an immediate check.
+
+In-app installation requires a writable app location. It verifies the release's SHA-256 digest, bundle identity, version, and code signature before replacing the app, and restores the old bundle if replacement or relaunch fails. For a read-only location, move the app into Applications or use Homebrew. In-app updates do not change Homebrew's installed-version records; `brew upgrade` remains available.
+
 Or download `MenuLauncher.dmg` from [Releases](https://github.com/ykai55/menubar-launcher/releases/latest). The app is not notarized, so before the first launch run:
 
 ```sh
@@ -84,13 +88,21 @@ Write modifiers (`command`, `option`, `control`, `shift`) and a key joined by `+
 
 ### Mouse buttons
 
-Open the panel centered on the cursor with a mouse side button (or a button + modifier combo). Near screen edges, the panel shifts to stay within the visible area:
+Open the panel with a mouse side button (or a button + modifier combo), placing the first pinned icon under the cursor. Mouse opening returns the grid to the top; without pins, it aligns the first available icon. Near screen edges, the panel shifts to stay within the visible area:
 
 ```json
 { "mouse": [{ "button": "back" }, { "button": "forward", "modifiers": ["option"] }] }
 ```
 
 Needs the Accessibility permission. Matching clicks are swallowed, so they don't also trigger browser back/forward.
+
+### Startup and trigger diagnostics
+
+If the panel intermittently fails to open, inspect `~/Library/Logs/MenuLauncher/launcher.log` around the failed click. It records startup, Accessibility status, mouse matching and delivery, listener recovery, menu bar clicks, and window visibility/focus transitions. The listener checks its health every three seconds and reconnects after wake or session activation.
+
+This local diagnostic log contains no search text or launched-app history and is separate from usage recording. It rotates at 1 MiB, retaining one backup (`launcher.log.1`). A plain right-click on the menu bar icon opens its context menu; global right-click triggers require a modifier.
+
+App scans run in the background at startup, on manual rescan, and when macOS filesystem notifications report changes in application directories. Notifications are merged after one second of quiet; changes received during a scan schedule one follow-up scan. The current app list remains usable throughout. Closing the panel does not trigger a scan. `scan.watch_started` / `scan.directory_changed` report monitoring activity; `scan.begin` and `scan.finished` record scanning and result-application times.
 
 ### Usage stats
 

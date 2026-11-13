@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import MenuLauncher
 
 @MainActor
@@ -36,6 +37,73 @@ final class PreferencesTests: XCTestCase {
             XCTAssertEqual(try JSONDecoder().decode(LauncherConfig.self, from: JSONEncoder().encode(config)), config)
         }
         XCTAssertThrowsError(try JSONDecoder().decode(LauncherConfig.self, from: Data(#"{"language":"invalid"}"#.utf8)))
+    }
+
+    func testMouseOpeningExposesFirstPinnedIconInBothModes() throws {
+        let model = try fixture()
+        let offsets = ["scrollOffset.custom", "scrollOffset.sorted"]
+        let saved = offsets.map { UserDefaults.standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(offsets, saved) { UserDefaults.standard.set(value, forKey: key) }
+        }
+        let apps = (0..<60).map { i in
+            AppItem(name: "App \(i)", url: URL(fileURLWithPath: "/fixture/\(i).app"),
+                    bundleID: "fixture.\(i)", icon: NSImage(), keywords: ["app"],
+                    words: ["app"], sortKey: String(format: "%02d", i))
+        }
+        var config = LauncherConfig()
+        config.pinned = ["fixture.3", "fixture.1"]
+        try ConfigStore.save(config)
+        model.loadConfig()
+        model.reload(apps: apps)
+        for mode in [BrowseMode.custom, .sorted] {
+            model.setMode(mode)
+            model.scrollOffset = 240
+            model.prepareForShow()
+            XCTAssertEqual(model.scrollOffset, 240, "Keyboard opening retains scroll")
+            let hosting = NSHostingView(rootView: LauncherView(model: model))
+            hosting.sizingOptions = []
+            let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: Layout.width,
+                                                      height: model.preferredHeight),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = hosting
+            window.alphaValue = 0
+            window.orderFront(nil)
+            defer { window.orderOut(nil) }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            func scrollView(in view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView { return scroll }
+                return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+            }
+            let scroll = try XCTUnwrap(scrollView(in: hosting))
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 240))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0)
+            model.prepareForShow(alignFirstIcon: true)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 1,
+                           "Mouse opening must scroll the native viewport, not just reset the saved offset")
+            model.query = "App 8"
+            model.prepareForShow(alignFirstIcon: true)
+            XCTAssertTrue(model.isBrowsing)
+            XCTAssertEqual(model.scrollOffset, 0)
+            XCTAssertEqual(model.selection, 0)
+            XCTAssertEqual(model.scrollRequest?.rowID, Layout.gridTopAnchor)
+            XCTAssertEqual(model.scrollRequest?.animated, false)
+            guard case .app(let app) = model.browseItems[0] else { return XCTFail("Missing pinned app") }
+            XCTAssertEqual(app.bundleID, "fixture.3")
+            let point = try XCTUnwrap(model.firstIconFromTop)
+            XCTAssertEqual(point.x, 45)
+            XCTAssertEqual(point.y, mode == .custom ? 75 : 113)
+        }
+        config.pinned = []
+        try ConfigStore.save(config)
+        model.loadConfig()
+        model.prepareForShow(alignFirstIcon: true)
+        XCTAssertNotNil(model.firstIconFromTop, "No pins falls back to first available tile")
+        model.reload(apps: [])
+        XCTAssertNil(model.firstIconFromTop)
     }
 
     func testSaveMergesExternalOrganizationAndUnchangedPreferences() throws {
