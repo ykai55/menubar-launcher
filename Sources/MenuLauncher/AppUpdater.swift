@@ -52,6 +52,18 @@ struct AppRelease: Equatable {
         return AppRelease(version: response.tag_name.hasPrefix("v") ? String(response.tag_name.dropFirst()) : response.tag_name,
                           downloadURL: asset.browser_download_url, sha256: hash)
     }
+
+    /// REST 接口限流时的等价元数据：版本来自 latest 重定向，哈希来自发布附件
+    static func metadata(tag: String, sha256: String) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "tag_name": tag, "draft": false, "prerelease": false,
+            "assets": [[
+                "name": "MenuLauncher.zip",
+                "browser_download_url": "https://github.com/ykai55/menubar-launcher/releases/download/\(tag)/MenuLauncher.zip",
+                "digest": "sha256:\(sha256)"
+            ]]
+        ])
+    }
 }
 
 enum UpdateError: Error {
@@ -90,6 +102,16 @@ final class AppUpdater: ObservableObject {
     }
 
     static func fetchLatest() async throws -> Data {
+        do {
+            return try await fetchAPI()
+        } catch UpdateError.http(let code) where code == 403 || code == 429 {
+            // 未认证的 REST 接口按出口 IP 限流 60 次/小时，共用出口很容易打满。
+            // 回退到 release 页面重定向和随包发布的 .sha256，不占 API 配额
+            return try await fetchReleasePage()
+        }
+    }
+
+    private static func fetchAPI() async throws -> Data {
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/ykai55/menubar-launcher/releases/latest")!)
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -98,6 +120,34 @@ final class AppUpdater: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         try validateHTTP(response)
         return data
+    }
+
+    private static func fetchReleasePage() async throws -> Data {
+        var page = URLRequest(url: URL(string: "https://github.com/ykai55/menubar-launcher/releases/latest")!)
+        page.httpMethod = "HEAD"
+        page.timeoutInterval = 20
+        page.cachePolicy = .reloadIgnoringLocalCacheData
+        page.setValue("MenuLauncher", forHTTPHeaderField: "User-Agent")
+        let (_, response) = try await URLSession.shared.data(for: page)
+        try validateHTTP(response)
+        guard let finalURL = response.url, finalURL.host == "github.com",
+              finalURL.path.hasPrefix("/ykai55/menubar-launcher/releases/tag/"),
+              let tag = finalURL.pathComponents.last, tag.hasPrefix("v") else {
+            throw UpdateError.invalidRelease
+        }
+
+        var checksum = URLRequest(url: URL(string: "https://github.com/ykai55/menubar-launcher/releases/download/\(tag)/MenuLauncher.zip.sha256")!)
+        checksum.timeoutInterval = 20
+        checksum.cachePolicy = .reloadIgnoringLocalCacheData
+        checksum.setValue("MenuLauncher", forHTTPHeaderField: "User-Agent")
+        let (data, checksumResponse) = try await URLSession.shared.data(for: checksum)
+        try validateHTTP(checksumResponse)
+        guard let text = String(data: data, encoding: .utf8),
+              let hash = text.split(whereSeparator: { $0.isWhitespace || $0 == "*" }).first.map(String.init),
+              hash.count == 64, hash.allSatisfy({ $0.isHexDigit }) else {
+            throw UpdateError.invalidRelease
+        }
+        return try AppRelease.metadata(tag: tag, sha256: hash)
     }
 
     static func validateHTTP(_ response: URLResponse) throws {

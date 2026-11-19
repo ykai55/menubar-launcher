@@ -27,7 +27,7 @@ macOS 菜单栏下拉式应用启动器（Swift Package，SwiftUI + AppKit，无
 - Safari 在 `/System/Cryptexes/App/System/Applications`，/Applications 下的是带 hidden 标志的符号链接，扫描时要单独加这个目录
 - 设计原则：利用空间记忆，应用位置稳定。不做使用频率等智能排序；配置里的顺序就是显示顺序
 - 本地化：`Localization.swift` 的 AppLanguage 支持 system / en / zh-Hans，配置缺省跟随系统；界面和 CLI 都要提供中英文。README.md 全英文，README.zh-CN.md 全中文（语言切换链接除外）。只翻译展示标签，固定 / 应用等内部 key 不变，不翻译用户目录名。
-- 更新：`AppUpdater` 独立发布检查与安装状态，只有右上角 `UpdateButton` 观察，勿转发给 LauncherModel 触发网格重绘。启动及打开面板时检查 GitHub latest，成功间隔 1h、失败 15min；右键菜单可强制检查。只接受更高的三段正式版本及指定仓库 ZIP/SHA-256。`UpdateInstaller` 在目标同卷私有目录校验并暂存，复制当前可执行文件作为 helper；helper 就绪后主进程退出，再替换并重启，失败回滚，回滚失败保留备份路径。测试注入 fetch，禁止真实联网或替换已安装应用。本地构建须显式传当前发布版本 `VERSION=X.Y.Z`，仓库 VERSION 只是 CI 下限，直接使用可能错误提示旧版本更新。
+- 更新：`AppUpdater` 独立发布检查与安装状态，只有右上角 `UpdateButton` 观察，勿转发给 LauncherModel 触发网格重绘。启动及打开面板时检查 GitHub latest，成功间隔 1h、失败 15min；右键菜单可强制检查。REST 返回 403/429（共用出口打满未认证配额）时回退到 releases/latest 重定向取 tag、再读发布附件 `MenuLauncher.zip.sha256`，仍按 SHA-256 校验，所以发布流程必须上传该附件。只接受更高的三段正式版本及指定仓库 ZIP/SHA-256。`UpdateInstaller` 在目标同卷私有目录校验并暂存，复制当前可执行文件作为 helper；helper 就绪后主进程退出，再替换并重启，失败回滚，回滚失败保留备份路径。测试注入 fetch，禁止真实联网或替换已安装应用。本地构建须显式传当前发布版本 `VERSION=X.Y.Z`，仓库 VERSION 只是 CI 下限，直接使用可能错误提示旧版本更新。
 - 设置：`SettingsView.swift` 是 AppDelegate 持有的独立原生窗口，齿轮、右键菜单或 ⌘, 打开。`PreferencesDraft` 保存时与窗口初始值比较，仅合并改动过的偏好到磁盘最新配置；先保存成功再 applyConfig，错误时不覆盖磁盘或应用内配置。新增配置或入口时同步两份 README 和 skill。
 - 设置中的浏览模式也经过草稿和保存流程，保存配置成功后才调用 setMode，沿用 UserDefaults 持久化；未改模式时保留通过面板切换的结果。
 - 每次打开设置先在 hide/activate 前取得可见弹窗的 screen，在该屏幕 visibleFrame 内居中；无可见弹窗时优先鼠标所在屏幕。复用已打开的设置窗口时保留草稿，也要重新定位。

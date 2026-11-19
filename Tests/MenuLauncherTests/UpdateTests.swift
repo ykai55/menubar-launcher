@@ -56,6 +56,18 @@ final class UpdateTests: XCTestCase {
         XCTAssertThrowsError(try AppRelease.parse(Data("invalid".utf8), currentVersion: "0.2.5"))
     }
 
+    func testRateLimitFallbackMetadataKeepsChecksumVerification() throws {
+        let hash = String(repeating: "b", count: 64)
+        let data = try AppRelease.metadata(tag: "v0.2.9", sha256: hash)
+        let release = try AppRelease.parse(data, currentVersion: "0.2.6")
+        XCTAssertEqual(release?.version, "0.2.9")
+        XCTAssertEqual(release?.sha256, hash)
+        XCTAssertEqual(release?.downloadURL.lastPathComponent, "MenuLauncher.zip")
+        XCTAssertNil(try AppRelease.parse(data, currentVersion: "0.2.9"))
+        XCTAssertThrowsError(try AppRelease.parse(
+            AppRelease.metadata(tag: "v0.2.9", sha256: "abc"), currentVersion: "0.2.6"))
+    }
+
     func testCheckThrottleForceAndFailuresKeepKnownUpdate() async throws {
         var calls = 0
         var fail = false

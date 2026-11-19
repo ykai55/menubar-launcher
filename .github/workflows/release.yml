@@ -64,6 +64,7 @@ jobs:
           swift --version
           ./make-dmg.sh
           ditto -c -k --keepParent build/MenuLauncher.app build/MenuLauncher.zip
+          shasum -a 256 build/MenuLauncher.zip | cut -d' ' -f1 > build/MenuLauncher.zip.sha256
           ditto -c -k --keepParent skills/menulauncher build/menulauncher-skill.zip
           ARCHS="$(lipo -archs build/MenuLauncher.app/Contents/MacOS/MenuLauncher)"
           [[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]]
@@ -107,7 +108,7 @@ jobs:
               --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
           fi
           gh release upload "$TAG" build/MenuLauncher.dmg build/MenuLauncher.zip \
-            build/menulauncher-skill.zip --clobber
+            build/MenuLauncher.zip.sha256 build/menulauncher-skill.zip --clobber
           gh release edit "$TAG" --draft=false --latest
 
       - name: Reuse published archive on retry
