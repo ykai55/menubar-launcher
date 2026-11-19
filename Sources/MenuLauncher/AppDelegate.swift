@@ -403,8 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if trigger == "mouse" {
             anchor = positionAtMouse()
         } else {
-            positionUnderStatusItem()
-            anchor = NSPoint(x: 0, y: 1)
+            anchor = positionUnderStatusItem()
         }
         // Set opacity before ordering the window in, including its first frame.
         panel.alphaValue = 0
@@ -466,15 +465,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NSPoint(x: icon.x / size.width, y: 1 - icon.y / size.height)
     }
 
-    /// 面板顶部贴住菜单栏图标下沿，左对齐图标；超出屏幕右侧时往左收
-    private func positionUnderStatusItem() {
-        guard let button = statusItem.button, let window = button.window else { return }
-        let buttonRect = window.convertToScreen(button.convert(button.bounds, to: nil))
-        let screen = window.screen ?? NSScreen.main!
-        var x = buttonRect.minX
-        x = min(x, screen.visibleFrame.maxX - panel.frame.width - 6)
-        let topY = buttonRect.minY - 4
-        panel.setFrameTopLeftPoint(NSPoint(x: x, y: topY))
+    /// 面板顶部贴住菜单栏图标下沿，左对齐图标；图标被 Ice 等工具移出屏幕时改贴菜单栏右侧
+    private func positionUnderStatusItem() -> NSPoint {
+        let icon = statusItem.button.flatMap { button -> NSRect? in
+            guard let window = button.window else { return nil }
+            // Ice 隐藏图标时会把状态项窗口挪到所有屏幕之外，这时坐标不能再当锚点
+            let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+            return NSScreen.screens.contains { $0.frame.intersects(rect) } ? rect : nil
+        }
+        let pointer = NSEvent.mouseLocation
+        let screen = icon.flatMap { rect in
+            NSScreen.screens.first { $0.frame.intersects(rect) }
+        } ?? NSScreen.screens.first {
+            NSMouseInRect(pointer, $0.frame, false)
+        } ?? NSScreen.main!
+        let layout = Layout.menuBarPopupFrame(size: panel.frame.size, icon: icon,
+                                              visibleFrame: screen.visibleFrame)
+        panel.setFrame(layout.frame, display: false)
+        return layout.zoomAnchor
     }
 
     /// 保持顶边不动，按当前模式调整高度

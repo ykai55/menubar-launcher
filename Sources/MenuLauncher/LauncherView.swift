@@ -38,6 +38,30 @@ enum Layout {
                       y: max(visibleFrame.minY + 6, min(y, visibleFrame.maxY - size.height - 6)),
                       width: size.width, height: size.height)
     }
+
+    /// 下拉面板贴住菜单栏图标。icon 为 nil 表示图标已被 Ice 之类工具移出所有屏幕，
+    /// 此时退回菜单栏右侧，保证热键打开的面板仍然看得见
+    static func menuBarPopupFrame(size: NSSize, icon: NSRect?,
+                                  visibleFrame: NSRect) -> (frame: NSRect, zoomAnchor: NSPoint) {
+        let margin: CGFloat = 6
+        let rawX: CGFloat
+        let top: CGFloat
+        let anchorX: CGFloat
+        if let icon {
+            rawX = icon.minX
+            top = icon.minY - 4
+            anchorX = 0
+        } else {
+            rawX = visibleFrame.maxX - size.width - margin
+            top = visibleFrame.maxY - 4
+            anchorX = 1
+        }
+        // 图标只会在菜单栏高度内，纵向只需保证面板底边不越出屏幕
+        let x = max(visibleFrame.minX + margin, min(rawX, visibleFrame.maxX - size.width - margin))
+        let y = max(visibleFrame.minY + margin, top - size.height)
+        return (NSRect(x: x, y: y, width: size.width, height: size.height),
+                NSPoint(x: anchorX, y: 1))
+    }
 }
 
 struct LauncherView: View {
