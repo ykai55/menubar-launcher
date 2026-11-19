@@ -23,7 +23,7 @@ open -a MenuLauncher
 
 Update with `brew upgrade --cask menulauncher`.
 
-MenuLauncher also checks for stable GitHub releases on startup and when you open the panel (at most once every six hours; failed checks retry after 15 minutes). When a newer version is available, **Upgrade** appears in the top-right corner. Click it to download, verify, install, and restart; your configuration stays intact. The menu bar icon's right-click menu includes **Check for updates…** for an immediate check.
+MenuLauncher also checks for stable GitHub releases on startup and when you open the panel (at most once every hour; failed checks retry after 15 minutes). When a newer version is available, **Upgrade** appears in the top-right corner. Click it to download, verify, install, and restart; your configuration stays intact. The menu bar icon's right-click menu includes **Check for updates…** for an immediate check.
 
 In-app installation requires a writable app location. It verifies the release's SHA-256 digest, bundle identity, version, and code signature before replacing the app, and restores the old bundle if replacement or relaunch fails. For a read-only location, move the app into Applications or use Homebrew. In-app updates do not change Homebrew's installed-version records; `brew upgrade` remains available.
 

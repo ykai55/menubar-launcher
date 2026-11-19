@@ -111,7 +111,7 @@ final class AppUpdater: ObservableObject {
         defer { isChecking = false }
         do {
             available = try AppRelease.parse(try await fetch(), currentVersion: currentVersion)
-            nextCheck = now.addingTimeInterval(6 * 60 * 60)
+            nextCheck = now.addingTimeInterval(60 * 60)
             if force {
                 onNotice?(available.map { language.text("Version \($0.version) is available. Click Upgrade in the top-right corner.", "发现新版本 \($0.version)，点击右上角“升级”即可更新。") }
                     ?? language.text("You're up to date (\(currentVersion)).", "当前已是最新版本（\(currentVersion)）。"), false)

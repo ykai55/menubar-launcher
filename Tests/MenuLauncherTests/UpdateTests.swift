@@ -89,6 +89,22 @@ final class UpdateTests: XCTestCase {
         XCTAssertEqual(notices, [true, false])
     }
 
+    func testSuccessfulCheckWaitsAnHour() async throws {
+        var calls = 0
+        let data = try metadata()
+        let updater = AppUpdater(currentVersion: "0.2.5") {
+            calls += 1
+            return data
+        }
+        let start = Date()
+        await updater.check(now: start)
+        XCTAssertEqual(calls, 1)
+        await updater.check(now: start.addingTimeInterval(3599))
+        XCTAssertEqual(calls, 1)
+        await updater.check(now: start.addingTimeInterval(3601))
+        XCTAssertEqual(calls, 2)
+    }
+
     func testConcurrentChecksAreCoalescedAndCurrentVersionHasNoButton() async throws {
         let data = try metadata(version: "v0.2.5")
         var calls = 0
